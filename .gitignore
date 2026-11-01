@@ -1,0 +1,4 @@
+target/
+# backup do registro do PC de casa (dados locais) e copia local de codigo de terceiros
+backup/
+ref/
