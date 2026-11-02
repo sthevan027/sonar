@@ -16,6 +16,18 @@ Origem: o mixer de volume do Windows 10/11 exige muitos cliques e não permite d
 - **Persistência:** arquivo JSON (padrão do Focus Brew, `directories::ProjectDirs`). SQLite se crescer. Redis descartado (é servidor).
 - **Windows suportado:** 11 e 10 na v1. O PC de casa só valida o 11 (build 26300); o 10 fica "implementado, não testado" até haver teste real.
 
+## Design do painel (mockups no Doop, 2026-11-02)
+
+Canvas: https://doop.design/c/2qgDviRoxZ (visual "estúdio à noite": grafite quente `#1B1A18`, latão `#D9A441` como destaque, azul-acinzentado `#86A9B8` para a caixa; fontes Bricolage Grotesque + DM Sans; ícones Lucide). Painel de bandeja ~388×668.
+
+- **A — Painel principal (escolhido):** perfis com ícone no topo, saída padrão com volume, uma linha por app com volume e seletor de saída (chip Caixa/Headset), rodapé "regra salva".
+- **C — Editar perfil (escolhido):** ícone grande, nome **opcional**, grade de ícones, lista de apps do perfil com saída de cada um, aviso "apps fora do perfil ficam como estavam".
+- **D — Dispositivos de saída (pedido do Sthevan):** lista de todos os dispositivos, **renomear** (nome do Windows fica embaixo), **ícone por dispositivo**, **ocultar do painel**, desconectados esmaecidos com "regras guardadas", restaurar nome original.
+- **E — Menu de Configurações:** Geral (**iniciar com o Windows**, **atalho global**), atalhos para Dispositivos e Perfis, Sobre.
+- **B — Apps agrupados por dispositivo (arrastar):** descartado como principal; pode voltar como visualização alternativa.
+- **Fora do desenho por ora:** tela de **primeiro uso** (fica para a construção).
+- Ícones nos mockups A, B e C vêm do Iconify por hotlink e falharam de forma intermitente nas capturas; D e E usam SVG embutido. Na implementação real usar ícones locais.
+
 ## Fatos técnicos verificados
 
 - Roteamento por app funciona no Win11 26300 via `AudioPolicyConfig` (ver README). Sem driver virtual.
@@ -25,7 +37,7 @@ Origem: o mixer de volume do Windows 10/11 exige muitos cliques e não permite d
 
 ## Ainda em aberto
 
-- O que o painel mostra e como se roteia na UI (dropdown por app? arrastar?). Pedir mockup.
+- ~~O que o painel mostra e como se roteia na UI~~ → resolvido: A (seletor por app). Falta decidir se mostra apps em silêncio (linha recolhida, ideia do mockup B) — não respondido.
 - Rota **sobrevive** a fechar/reabrir o app? E a reiniciar o Windows? (não testado)
 - Comportamento exato quando o dispositivo some (um relato diz que o app fica mudo até trocar a saída; o Sthevan quer cair no padrão).
 - Posicionar o popup perto do ícone da bandeja (o Focus Brew não faz isso).
@@ -34,6 +46,6 @@ Origem: o mixer de volume do Windows 10/11 exige muitos cliques e não permite d
 
 ## Próximos passos sugeridos
 
-1. Terminar rodada de perguntas (painel, dispositivo que some, nome).
+1. Fechar o que sobrou: apps em silêncio no painel, nome do produto, licença (aberto/fechado).
 2. Testar persistência da rota (fechar/reabrir app, reiniciar).
 3. Escrever o design formal (`docs/superpowers/specs/…-design.md`) e só então o plano de implementação.
