@@ -14,6 +14,8 @@ cargo run -- clear <pid>             # volta o app para o padrão do Windows
 cargo run -- roundtrip <pid>         # lê a rota e grava de volta (diagnóstico)
 ```
 
+Com `MIC=1` (variável de ambiente) todos os comandos operam em **entrada de áudio** (microfones) em vez de saída.
+
 Usa a interface não documentada `Windows.Media.Internal.AudioPolicyConfig` (`SetPersistedDefaultAudioEndpoint`), a mesma do EarTrumpet (MIT) e do Earmark. Validado em Windows 11 build 26300 (variante "21H2" da interface). Windows 10 **não testado** (usa a variante Downlevel).
 
 ### Armadilha que custou horas

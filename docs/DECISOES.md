@@ -20,13 +20,22 @@ Origem: o mixer de volume do Windows 10/11 exige muitos cliques e não permite d
 
 Canvas: https://doop.design/c/2qgDviRoxZ (visual "estúdio à noite": grafite quente `#1B1A18`, latão `#D9A441` como destaque, azul-acinzentado `#86A9B8` para a caixa; fontes Bricolage Grotesque + DM Sans; ícones Lucide). Painel de bandeja ~388×668.
 
-- **A — Painel principal (escolhido):** perfis com ícone no topo, saída padrão com volume, uma linha por app com volume e seletor de saída (chip Caixa/Headset), rodapé "regra salva".
-- **C — Editar perfil (escolhido):** ícone grande, nome **opcional**, grade de ícones, lista de apps do perfil com saída de cada um, aviso "apps fora do perfil ficam como estavam".
-- **D — Dispositivos de saída (pedido do Sthevan):** lista de todos os dispositivos, **renomear** (nome do Windows fica embaixo), **ícone por dispositivo**, **ocultar do painel**, desconectados esmaecidos com "regras guardadas", restaurar nome original.
-- **E — Menu de Configurações:** Geral (**iniciar com o Windows**, **atalho global**), atalhos para Dispositivos e Perfis, Sobre.
-- **B — Apps agrupados por dispositivo (arrastar):** descartado como principal; pode voltar como visualização alternativa.
+Telas finais (6): **A, A2, C, D, D2, E**. A tela B (arrastar apps entre dispositivos) foi **reprovada e removida** do canvas.
+
+- **A — Painel principal, aba Saída:** perfis com ícone no topo, abas **Saída | Microfone**, saída padrão com volume, uma linha por app com volume e seletor de saída (chip Caixa/Headset), rodapé "regra salva".
+- **A2 — Painel principal, aba Microfone:** mic padrão (nome, medidor de nível, volume, botão de silenciar) e a lista de **apps usando o microfone**, cada um com seu seletor de mic.
+- **C — Editar perfil:** ícone grande, nome **opcional**, grade de ícones, apps do perfil com **saída e (se o app usa microfone) mic** de cada um, aviso "apps fora do perfil ficam como estavam".
+- **D — Dispositivos de áudio, aba Saída:** **renomear** (nome do Windows fica embaixo), **ícone por dispositivo**, **ocultar do painel**, desconectados esmaecidos com "regras guardadas", restaurar nome original.
+- **D2 — Dispositivos de áudio, aba Entrada:** mesma ideia para microfones, com entrada padrão do Windows e medidor de nível.
+- **E — Menu de Configurações:** Geral (**iniciar com o Windows**, **atalho global**), atalhos para Dispositivos de áudio e Perfis, Sobre.
 - **Fora do desenho por ora:** tela de **primeiro uso** (fica para a construção).
-- Ícones nos mockups A, B e C vêm do Iconify por hotlink e falharam de forma intermitente nas capturas; D e E usam SVG embutido. Na implementação real usar ícones locais.
+- Todos os mockups usam SVG embutido (o hotlink do Iconify falhava de forma intermitente). Na implementação real usar ícones locais.
+
+## Microfone (decidido 2026-11-02)
+
+O Sthevan quer controlar também a **entrada**: quais programas usam qual microfone, e perfis que incluem o mic. **Viável**, verificado no spike: a mesma função `SetPersistedDefaultAudioEndpoint` aceita `eCapture` (ID termina em `#{2eef81be-33fa-4800-9670-1cd474972c3f}` em vez do sufixo de render). Escrita aceita (`hr=0x0`), lida de volta e limpa com sucesso no Discord.
+- **Não verificado:** trocar entre dois microfones reais (no PC de casa só há um ativo, o do headset). Volume e mute do microfone são do **dispositivo** (API padrão `IAudioEndpointVolume`, não testada aqui); **volume do mic por app não é suportado**.
+- Perfil agora guarda, por app, **saída e mic**; só apps com sessão de captura mostram a escolha de mic.
 
 ## Fatos técnicos verificados
 

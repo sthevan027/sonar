@@ -15,6 +15,10 @@ use windows::Win32::System::WinRT::*;
 const IID_21H2: GUID = GUID::from_u128(0xab3d4648_e242_459f_b02f_541c70306324);
 const IID_DOWNLEVEL: GUID = GUID::from_u128(0x2a59116d_6c4f_45e0_a74f_707e3fef9258);
 const RENDER_SUFFIX: &str = "#{e6327cad-dcec-4949-ae8a-991e976a79d2}";
+const CAPTURE_SUFFIX: &str = "#{2eef81be-33fa-4800-9670-1cd474972c3f}";
+fn is_mic() -> bool { std::env::var("MIC").is_ok() }
+fn flow() -> EDataFlow { if is_mic() { eCapture } else { eRender } }
+fn suffix() -> &'static str { if is_mic() { CAPTURE_SUFFIX } else { RENDER_SUFFIX } }
 const MMDEVAPI: &str = r"\\?\SWD#MMDEVAPI#";
 
 // vtable: 6 slots IUnknown+IInspectable, depois N metodos "incompletos", depois os 3 uteis.
@@ -63,15 +67,15 @@ fn wrap(id: &str, variant: u32) -> HSTRING {
         1 => mk(id),
         2 => mk(&format!("{MMDEVAPI}{id}")),
         3 => mk(&format!("{id}{RENDER_SUFFIX}")),
-        _ => mk(&format!("{MMDEVAPI}{id}{RENDER_SUFFIX}")),
+        _ => mk(&format!("{MMDEVAPI}{id}{}", suffix())),
     }
 }
 fn unwrap_id(s: &str) -> String {
-    s.trim_start_matches(MMDEVAPI).trim_end_matches(RENDER_SUFFIX).to_string()
+    s.trim_start_matches(MMDEVAPI).trim_end_matches(RENDER_SUFFIX).trim_end_matches(CAPTURE_SUFFIX).to_string()
 }
 
 unsafe fn devices(en: &IMMDeviceEnumerator) -> Result<Vec<(String, String)>> {
-    let col = en.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+    let col = en.EnumAudioEndpoints(flow(), DEVICE_STATE_ACTIVE)?;
     let mut v = vec![];
     for i in 0..col.GetCount()? {
         let d = col.Item(i)?;
@@ -97,7 +101,7 @@ unsafe fn proc_name(pid: u32) -> String {
 
 unsafe fn sessions(en: &IMMDeviceEnumerator) -> Result<()> {
     // Sessoes de todos os dispositivos de saida ativos
-    let col = en.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+    let col = en.EnumAudioEndpoints(flow(), DEVICE_STATE_ACTIVE)?;
     for i in 0..col.GetCount()? {
         let d = col.Item(i)?;
         let mgr: IAudioSessionManager2 = d.Activate(CLSCTX_ALL, None)?;
@@ -130,7 +134,7 @@ fn main() -> Result<()> {
                 let get: GetFn = vfn(p.ptr, p.get_slot);
                 let mut out = HSTRING::new();
                 for role in [eMultimedia.0, eConsole.0] {
-                    let hr = get(p.ptr, pid, eRender.0, role, &mut out);
+                    let hr = get(p.ptr, pid, flow().0, role, &mut out);
                     println!("role={role} hr={:#x} destino=\"{}\"", hr.0, unwrap_id(&out.to_string()));
                 }
             }
@@ -140,18 +144,18 @@ fn main() -> Result<()> {
                 let get: GetFn = vfn(p.ptr, p.get_slot);
                 let set: SetFn = vfn(p.ptr, p.set_slot);
                 let mut out = HSTRING::new();
-                let hr = get(p.ptr, pid, eRender.0, eMultimedia.0, &mut out);
+                let hr = get(p.ptr, pid, flow().0, eMultimedia.0, &mut out);
                 let raw_s = out.to_string();
                 println!("get hr={:#x} len={} bruto=\"{}\"", hr.0, raw_s.len(), raw_s);
                 println!("utf16: {:?}", raw_s.encode_utf16().take(12).collect::<Vec<_>>());
                 // devolve exatamente o mesmo HSTRING
                 let raw: *mut c_void = std::mem::transmute_copy(&out);
-                let hr2 = set(p.ptr, pid, eRender.0, eMultimedia.0, raw);
+                let hr2 = set(p.ptr, pid, flow().0, eMultimedia.0, raw);
                 println!("set(mesmo hstring) hr={:#x}", hr2.0);
                 // e uma copia nova com o mesmo texto
                 let h2 = mk(&raw_s);
                 let raw2: *mut c_void = std::mem::transmute_copy(&h2);
-                let hr3 = set(p.ptr, pid, eRender.0, eMultimedia.0, raw2);
+                let hr3 = set(p.ptr, pid, flow().0, eMultimedia.0, raw2);
                 println!("set(copia do texto) hr={:#x}", hr3.0);
             }
             Some(cmd @ ("route" | "clear")) => {
@@ -169,7 +173,7 @@ fn main() -> Result<()> {
                 } else { HSTRING::new() };
                 let raw: *mut c_void = std::mem::transmute_copy(&h);
                 for role in [eMultimedia.0, eConsole.0] {
-                    let hr = set(p.ptr, pid, eRender.0, role, raw);
+                    let hr = set(p.ptr, pid, flow().0, role, raw);
                     println!("Set role={role} hr={:#x} ({})", hr.0, p.variant);
                 }
             }
