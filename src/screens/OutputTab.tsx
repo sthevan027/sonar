@@ -16,6 +16,9 @@ import {
   type AppRow,
 } from "./model";
 
+// Reexportado para a Task 12 e para os testes.
+export { groupSessions, type AppRow } from "./model";
+
 /** Aba Saída (mockup A): saída padrão, apps com som e a linha recolhida "Em silêncio". */
 export function OutputTab({ state }: { state: AppState }) {
   const [silentOpen, setSilentOpen] = useState(false);

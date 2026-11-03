@@ -3,34 +3,28 @@ import "./styles/base.css";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Panel } from "./screens/Panel";
 import { retryAppState } from "./store";
-
-/**
- * Telas do app. Cada tela nova entra como outro nome aqui e um `case` em `Screen`:
- * a Task 12 acrescenta o editor de perfil; as próximas, dispositivos e configurações.
- */
-export type Route = { name: "panel" };
+import type { Route } from "./routes";
 
 const noop = () => undefined;
 
 export default function App() {
-  // Sem setter por enquanto: só existe o painel. Quem trocar de tela ganha o `setRoute` aqui.
-  const [route] = useState<Route>({ name: "panel" });
+  const [route, setRoute] = useState<Route>({ name: "panel" });
   return (
     <main className="win">
       <ErrorBoundary onReset={retryAppState}>
         <Suspense fallback={null}>
-          <Screen route={route} />
+          <Screen route={route} navigate={setRoute} />
         </Suspense>
       </ErrorBoundary>
     </main>
   );
 }
 
-function Screen({ route }: { route: Route }) {
+function Screen({ route, navigate }: { route: Route; navigate: (route: Route) => void }) {
   switch (route.name) {
     case "panel":
-      // "+" do perfil ainda não abre nada: a Task 12 liga o editor.
-      return <Panel onAddProfile={noop} />;
+      // "+" do perfil ainda não abre nada: a Task 12 liga o editor a `navigate`.
+      return <Panel onAddProfile={noop} onNavigate={navigate} />;
     default:
       return null;
   }

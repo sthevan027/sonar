@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Icon } from "../components/Icon";
 import { Tabs } from "../components/Tabs";
 import { useAppState } from "../store";
+import type { Route } from "../routes";
 import { MicTab } from "./MicTab";
 import { OutputTab } from "./OutputTab";
 import { ProfileBar } from "./ProfileBar";
@@ -9,6 +10,8 @@ import { ProfileBar } from "./ProfileBar";
 interface PanelProps {
   /** Botão "+" da barra de perfis. Ligado ao editor na Task 12. */
   onAddProfile: () => void;
+  /** Troca de tela (App). Nenhum botão do painel usa ainda; a Task 12 liga o editor por aqui. */
+  onNavigate: (route: Route) => void;
 }
 
 /** Painel principal (mockups A e A2): perfis, avisos, abas Saída | Microfone. */
