@@ -64,25 +64,36 @@ pub fn reconcile(
     sessions: &[AudioSession],
     backend: &dyn RouteBackend,
 ) -> Vec<Outcome> {
-    let mut outcomes = Vec::new();
-    for rule in &rules.rules {
-        let matching: Vec<&AudioSession> = sessions
-            .iter()
-            .filter(|s| s.flow == rule.flow && s.exe.eq_ignore_ascii_case(&rule.exe))
-            .collect();
-        if matching.is_empty() {
-            continue;
-        }
-        let device_ready = devices.iter().any(|d| d.id == rule.device && d.connected);
-        if !device_ready {
-            outcomes.push(Outcome::DeviceAbsent { exe: rule.exe.clone() });
-            continue;
-        }
-        for session in matching {
-            outcomes.push(apply_to_session(rule, session, backend));
-        }
+    rules
+        .rules
+        .iter()
+        .flat_map(|rule| reconcile_rule(rule, devices, sessions, backend))
+        .collect()
+}
+
+/// Aplica uma regra às sessões do executável dela no sentido. Usada pela releitura completa
+/// (`reconcile`) e pela escolha de um app, que não relê o sistema.
+pub fn reconcile_rule(
+    rule: &Rule,
+    devices: &[Device],
+    sessions: &[AudioSession],
+    backend: &dyn RouteBackend,
+) -> Vec<Outcome> {
+    let matching: Vec<&AudioSession> = sessions
+        .iter()
+        .filter(|s| s.flow == rule.flow && s.exe.eq_ignore_ascii_case(&rule.exe))
+        .collect();
+    if matching.is_empty() {
+        return Vec::new();
     }
-    outcomes
+    let device_ready = devices.iter().any(|d| d.id == rule.device && d.connected);
+    if !device_ready {
+        return vec![Outcome::DeviceAbsent { exe: rule.exe.clone() }];
+    }
+    matching
+        .into_iter()
+        .map(|session| apply_to_session(rule, session, backend))
+        .collect()
 }
 
 fn apply_to_session(

@@ -1,21 +1,46 @@
 //! `Engine`: dono do estado do app. Junta fontes do sistema, regras, perfis e metadados,
 //! aplica as regras no Windows e avisa a interface (`notify`) a cada mudança.
 //!
-//! Travamento: o estado fica num `Mutex` interno. O notificador é chamado sempre depois
-//! de soltar o travamento, então ele pode ler o estado sem deadlock.
+//! Travamentos (sempre nesta ordem, nunca o contrário):
+//! - `apply`: quem chama o backend de roteamento (ou relê e reaplica regras) segura este.
+//!   Assim uma releitura nunca reaplica uma regra antiga por cima de uma escolha nova.
+//! - `persist`: uma gravação em disco por vez; cada uma copia o estado atual ao começar.
+//! - `emit`: monta o `AppState` e avisa a interface. Estados saem na ordem em que foram montados.
+//! - `inner`: os dados. Segurado só por instantes, nunca durante chamada COM ou disco.
+//!
+//! A leitura do sistema (dispositivos, sessões, volumes) acontece sem nenhum desses travamentos
+//! de dados: é a parte lenta. Escolher a saída de um app não relê nada: aplica a regra às
+//! sessões já conhecidas daquele app e atualiza só elas.
 
 use crate::audio::default_device::DefaultDevice;
-use crate::audio::endpoint::EndpointControl;
+use crate::audio::endpoint::{clamp_volume, EndpointControl};
 use crate::audio::types::{AudioError, AudioSession, AudioSource, Device, DeviceId, Flow, RouteBackend};
 use crate::profiles::{self, Change, NameError, Profile, Target};
-use crate::rules::{reconcile, Outcome, Rule, RuleSet};
+use crate::rules::{reconcile, reconcile_rule, Outcome, Rule, RuleSet};
 use crate::state::{AppState, DeviceMeta, DeviceView, Settings};
 use crate::store::Store;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Estado mutável, sempre acessado sob o travamento do `Engine`.
+/// Volume e mudo de um endpoint conectado, como o sistema os informou.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Level {
+    volume: f32,
+    muted: bool,
+}
+
+impl Default for Level {
+    /// O que a tela mostra quando não há leitura (endpoint desconectado ou leitura que falhou).
+    fn default() -> Self {
+        Level {
+            volume: 1.0,
+            muted: false,
+        }
+    }
+}
+
+/// Estado mutável, sempre acessado sob o travamento `inner` do `Engine`.
 struct Inner {
     devices: Vec<Device>,
     sessions: Vec<AudioSession>,
@@ -28,6 +53,19 @@ struct Inner {
     last_profile: Option<String>,
     /// Mensagem da última gravação que falhou; `None` quando a última gravação deu certo.
     save_error: Option<String>,
+    /// Volume e mudo dos endpoints conectados. Lidos no `refresh`; os comandos de volume os
+    /// atualizam, para que montar o estado nunca precise falar com o Windows.
+    levels: BTreeMap<String, Level>,
+    /// Sobe a cada mudança feita pelo usuário (rota, volume, mudo). Uma leitura do sistema que
+    /// começou antes de uma mudança não sobrescreve o que o usuário acabou de fazer.
+    generation: u64,
+}
+
+/// Leitura do sistema feita sem travamento. `None` quando aquela parte falhou: o último valor bom fica.
+struct SystemRead {
+    devices: Option<Vec<Device>>,
+    sessions: Option<Vec<AudioSession>>,
+    levels: Option<BTreeMap<String, Level>>,
 }
 
 pub struct Engine {
@@ -38,6 +76,9 @@ pub struct Engine {
     store: Store,
     notify: Arc<dyn Fn(&AppState) + Send + Sync>,
     inner: Mutex<Inner>,
+    apply: Mutex<()>,
+    persist: Mutex<()>,
+    emit: Mutex<()>,
 }
 
 impl Engine {
@@ -64,6 +105,8 @@ impl Engine {
             routing_available: true,
             last_profile: None,
             save_error: None,
+            levels: BTreeMap::new(),
+            generation: 0,
         };
         Engine {
             source,
@@ -73,74 +116,127 @@ impl Engine {
             store,
             notify,
             inner: Mutex::new(inner),
+            apply: Mutex::new(()),
+            persist: Mutex::new(()),
+            emit: Mutex::new(()),
         }
     }
 
-    /// Relê dispositivos e sessões, aplica as regras e avisa a interface.
+    /// Relê dispositivos, sessões e volumes, aplica as regras e avisa a interface.
     pub fn refresh(&self) {
-        let state = {
-            let mut guard = self.lock();
-            let inner = &mut *guard;
-            self.sync(inner);
-            build_state(inner, self.ctl.as_ref())
-        };
-        (self.notify)(&state);
+        let generation = self.lock().generation;
+        let read = self.read_system();
+        {
+            let _apply = guard(&self.apply);
+            self.store_system(generation, read);
+            self.reconcile_cached();
+        }
+        self.emit();
     }
 
-    /// Grava (ou, com `None`, remove) a regra do executável e aplica nas sessões abertas.
+    /// Grava (ou, com `None`, remove) a regra do executável e aplica só às sessões desse app.
+    /// Não relê o sistema: a sessão ganha o dispositivo novo na hora e a próxima releitura
+    /// confirma. Se o app ainda não tiver sessão conhecida, a regra vale quando ela aparecer.
     pub fn set_app_route(&self, exe: &str, flow: Flow, device: Option<DeviceId>) {
         let exe = exe.to_lowercase();
-        let clearing = device.is_none();
-        let state = {
-            let mut guard = self.lock();
-            let inner = &mut *guard;
+        {
+            let _apply = guard(&self.apply);
+            let (devices, sessions) = {
+                let mut inner = self.lock();
+                inner.generation += 1;
+                match &device {
+                    Some(device) => inner.rules.upsert(Rule {
+                        exe: exe.clone(),
+                        flow,
+                        device: device.clone(),
+                    }),
+                    None => inner.rules.remove(&exe, flow),
+                }
+                (inner.devices.clone(), inner.sessions.clone())
+            };
             match device {
-                Some(device) => inner.rules.upsert(Rule {
-                    exe: exe.clone(),
-                    flow,
-                    device,
-                }),
-                None => inner.rules.remove(&exe, flow),
+                Some(device) => {
+                    let rule = Rule {
+                        exe: exe.clone(),
+                        flow,
+                        device: device.clone(),
+                    };
+                    let outcomes =
+                        reconcile_rule(&rule, &devices, &sessions, self.backend.as_ref());
+                    let routed: Vec<u32> = outcomes
+                        .iter()
+                        .filter_map(|o| match o {
+                            Outcome::Applied { pid } | Outcome::AlreadyRouted { pid } => Some(*pid),
+                            _ => None,
+                        })
+                        .collect();
+                    self.patch_sessions(&routed, flow, &device);
+                    self.latch_routing(&outcomes);
+                }
+                None => {
+                    let pids: Vec<u32> = sessions
+                        .iter()
+                        .filter(|s| s.flow == flow && s.exe.eq_ignore_ascii_case(&exe))
+                        .map(|s| s.pid)
+                        .collect();
+                    clear_sessions(self.backend.as_ref(), &sessions, &exe, flow);
+                    // Sem rota, a sessão segue o padrão do Windows para o sentido.
+                    if let Some(default) = devices
+                        .iter()
+                        .find(|d| d.flow == flow && d.is_default && d.connected)
+                    {
+                        self.patch_sessions(&pids, flow, &default.id);
+                    }
+                }
             }
-            persist(&self.store, &mut inner.save_error, "rules", &inner.rules);
-            self.sync(inner);
-            if clearing {
-                clear_sessions(self.backend.as_ref(), &inner.sessions, &exe, flow);
-                self.reread_sessions(inner);
-            }
-            build_state(inner, self.ctl.as_ref())
-        };
-        (self.notify)(&state);
+        }
+        self.persist("rules", |inner| inner.rules.clone());
+        self.emit();
     }
 
     /// Ativa um perfil. `false` quando o id não existe (nada muda e nada é avisado).
     pub fn activate_profile(&self, id: &str) -> bool {
-        let state = {
-            let mut guard = self.lock();
-            let inner = &mut *guard;
-            let Some(profile) = inner.profiles.iter().find(|p| p.id == id).cloned() else {
-                return false;
+        {
+            let _apply = guard(&self.apply);
+            let (profile, mut rules) = {
+                let inner = self.lock();
+                let Some(profile) = inner.profiles.iter().find(|p| p.id == id).cloned() else {
+                    return false;
+                };
+                (profile, inner.rules.clone())
             };
-            let mut rules = inner.rules.clone();
             let changes = profiles::activate(&profile, &mut rules);
-            inner.rules = rules;
-            persist(&self.store, &mut inner.save_error, "rules", &inner.rules);
-            // As regras novas (`Change::Set`) entram pelo `sync`; as limpezas são feitas aqui.
-            self.sync(inner);
-            let mut cleared = false;
-            for change in changes {
-                if let Change::Cleared { exe, flow } = change {
-                    clear_sessions(self.backend.as_ref(), &inner.sessions, &exe, flow);
-                    cleared = true;
+            let generation = {
+                let mut inner = self.lock();
+                inner.rules = rules;
+                inner.generation += 1;
+                inner.generation
+            };
+            self.persist("rules", |inner| inner.rules.clone());
+            // Troca de perfil relê tudo: as regras novas entram pela releitura.
+            let read = self.read_system();
+            self.store_system(generation, read);
+            self.reconcile_cached();
+            let cleared: Vec<(String, Flow)> = changes
+                .into_iter()
+                .filter_map(|change| match change {
+                    Change::Cleared { exe, flow } => Some((exe, flow)),
+                    Change::Set(_) => None,
+                })
+                .collect();
+            if !cleared.is_empty() {
+                let sessions = self.lock().sessions.clone();
+                for (exe, flow) in &cleared {
+                    clear_sessions(self.backend.as_ref(), &sessions, exe, *flow);
+                }
+                // Sem a leitura, a sessão limpa mostraria o dispositivo antigo.
+                if let Ok(fresh) = self.source.sessions() {
+                    self.lock().sessions = fresh;
                 }
             }
-            if cleared {
-                self.reread_sessions(inner);
-            }
-            inner.last_profile = Some(id.to_string());
-            build_state(inner, self.ctl.as_ref())
-        };
-        (self.notify)(&state);
+            self.lock().last_profile = Some(id.to_string());
+        }
+        self.emit();
         true
     }
 
@@ -148,32 +244,28 @@ impl Engine {
     pub fn save_profile(&self, mut p: Profile) -> Result<(), NameError> {
         p.name = profiles::validate_name(p.name.as_deref().unwrap_or(""))?;
         let p = normalize_profile(p);
-        let state = {
-            let mut guard = self.lock();
-            let inner = &mut *guard;
+        {
+            let mut inner = self.lock();
             match inner.profiles.iter_mut().find(|existing| existing.id == p.id) {
                 Some(existing) => *existing = p,
                 None => inner.profiles.push(p),
             }
-            persist(&self.store, &mut inner.save_error, "profiles", &inner.profiles);
-            build_state(inner, self.ctl.as_ref())
-        };
-        (self.notify)(&state);
+        }
+        self.persist("profiles", |inner| inner.profiles.clone());
+        self.emit();
         Ok(())
     }
 
     pub fn delete_profile(&self, id: &str) {
-        let state = {
-            let mut guard = self.lock();
-            let inner = &mut *guard;
+        {
+            let mut inner = self.lock();
             inner.profiles.retain(|p| p.id != id);
             if inner.last_profile.as_deref() == Some(id) {
                 inner.last_profile = None;
             }
-            persist(&self.store, &mut inner.save_error, "profiles", &inner.profiles);
-            build_state(inner, self.ctl.as_ref())
-        };
-        (self.notify)(&state);
+        }
+        self.persist("profiles", |inner| inner.profiles.clone());
+        self.emit();
     }
 
     /// Nome vazio (ou só espaços) restaura o nome do Windows. Nome inválido devolve erro
@@ -190,19 +282,17 @@ impl Engine {
             .map(|i| i.trim().to_string())
             .filter(|i| !i.is_empty());
         let meta = DeviceMeta { name, icon, hidden };
-        let state = {
-            let mut guard = self.lock();
-            let inner = &mut *guard;
+        {
+            let mut inner = self.lock();
             // Metadado vazio equivale a não ter metadado: a entrada some do arquivo.
             if meta.is_meaningful() {
                 inner.meta.insert(id.0.clone(), meta);
             } else {
                 inner.meta.remove(&id.0);
             }
-            persist(&self.store, &mut inner.save_error, "devices", &inner.meta);
-            build_state(inner, self.ctl.as_ref())
-        };
-        (self.notify)(&state);
+        }
+        self.persist("devices", |inner| inner.meta.clone());
+        self.emit();
         Ok(())
     }
 
@@ -211,19 +301,14 @@ impl Engine {
     }
 
     pub fn save_settings(&self, s: Settings) {
-        let state = {
-            let mut guard = self.lock();
-            let inner = &mut *guard;
-            inner.settings = s;
-            persist(&self.store, &mut inner.save_error, "settings", &inner.settings);
-            build_state(inner, self.ctl.as_ref())
-        };
-        (self.notify)(&state);
+        self.lock().settings = s;
+        self.persist("settings", |inner| inner.settings.clone());
+        self.emit();
     }
 
-    /// Snapshot do estado atual. Relê só volume e mudo dos dispositivos conectados.
+    /// Snapshot do estado atual. Não fala com o sistema: só lê o que já foi lido.
     pub fn state(&self) -> AppState {
-        build_state(&self.lock(), self.ctl.as_ref())
+        build_state(&self.lock())
     }
 
     /// Volume de um app no sentido. Grava no sistema e, se der certo, avisa a interface.
@@ -240,15 +325,27 @@ impl Engine {
         Ok(())
     }
 
+    /// Volume do endpoint. Não relê o sistema: atualiza o valor guardado e avisa a interface.
     pub fn set_device_volume(&self, id: &DeviceId, v: f32) -> Result<(), AudioError> {
         self.ctl.set_volume(id, v)?;
-        self.refresh();
+        {
+            let mut inner = self.lock();
+            inner.generation += 1;
+            inner.levels.entry(id.0.clone()).or_default().volume = clamp_volume(v);
+        }
+        self.emit();
         Ok(())
     }
 
+    /// Mudo do endpoint. Mesmo fluxo de `set_device_volume`.
     pub fn set_device_muted(&self, id: &DeviceId, m: bool) -> Result<(), AudioError> {
         self.ctl.set_muted(id, m)?;
-        self.refresh();
+        {
+            let mut inner = self.lock();
+            inner.generation += 1;
+            inner.levels.entry(id.0.clone()).or_default().muted = m;
+        }
+        self.emit();
         Ok(())
     }
 
@@ -275,30 +372,71 @@ impl Engine {
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        // Veneno do travamento: o estado continua válido o bastante para seguir.
-        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        guard(&self.inner)
     }
 
-    /// Relê dispositivos e sessões (mantém o último valor bom se a leitura falhar), aplica
-    /// as regras e atualiza `routing_available`. Não notifica: quem chama decide quando avisar.
-    fn sync(&self, inner: &mut Inner) {
-        if let Ok(devices) = self.source.devices() {
+    /// Lê o sistema. Não segura nenhum travamento do `Engine`.
+    fn read_system(&self) -> SystemRead {
+        let devices = self.source.devices().ok();
+        let sessions = self.source.sessions().ok();
+        let levels = devices.as_ref().map(|devices| {
+            let levels: BTreeMap<String, Level> = devices
+                .iter()
+                .filter(|d| d.connected)
+                .map(|d| {
+                    let level = Level {
+                        volume: self.ctl.volume(&d.id).unwrap_or(1.0),
+                        muted: self.ctl.muted(&d.id).unwrap_or(false),
+                    };
+                    (d.id.0.clone(), level)
+                })
+                .collect();
+            levels
+        });
+        SystemRead {
+            devices,
+            sessions,
+            levels,
+        }
+    }
+
+    /// Guarda a leitura (quem chama segura `apply`). Dispositivos sempre entram; sessões e
+    /// volumes só se o usuário não mudou nada enquanto a leitura era feita. Nesse caso o valor
+    /// do usuário fica, e a próxima releitura traz o resto.
+    fn store_system(&self, generation: u64, read: SystemRead) {
+        let mut inner = self.lock();
+        if let Some(devices) = read.devices {
             inner.devices = devices;
         }
-        if let Ok(sessions) = self.source.sessions() {
-            inner.sessions = sessions;
+        if inner.generation == generation {
+            if let Some(sessions) = read.sessions {
+                inner.sessions = sessions;
+            }
+            if let Some(levels) = read.levels {
+                inner.levels = levels;
+            }
         }
-        let outcomes = reconcile(
-            &inner.rules,
-            &inner.devices,
-            &inner.sessions,
-            self.backend.as_ref(),
-        );
+    }
+
+    /// Aplica as regras às sessões conhecidas e atualiza `routing_available` (quem chama segura `apply`).
+    fn reconcile_cached(&self) {
+        let (rules, devices, sessions) = {
+            let inner = self.lock();
+            (inner.rules.clone(), inner.devices.clone(), inner.sessions.clone())
+        };
+        let outcomes = reconcile(&rules, &devices, &sessions, self.backend.as_ref());
         if outcomes.iter().any(|o| matches!(o, Outcome::Applied { .. })) {
             // Uma rota recém-gravada muda o dispositivo da sessão: relê para não mostrar o antigo.
-            self.reread_sessions(inner);
+            if let Ok(fresh) = self.source.sessions() {
+                self.lock().sessions = fresh;
+            }
         }
-        // Trava: cai no primeiro Unsupported e só volta com um roteamento bem-sucedido.
+        self.latch_routing(&outcomes);
+    }
+
+    /// Trava: cai no primeiro Unsupported e só volta com um roteamento bem-sucedido.
+    fn latch_routing(&self, outcomes: &[Outcome]) {
+        let mut inner = self.lock();
         if outcomes.iter().any(|o| {
             matches!(
                 o,
@@ -309,19 +447,46 @@ impl Engine {
             )
         }) {
             inner.routing_available = false;
-        } else if outcomes.iter().any(|o| {
-            matches!(o, Outcome::Applied { .. } | Outcome::AlreadyRouted { .. })
-        }) {
+        } else if outcomes
+            .iter()
+            .any(|o| matches!(o, Outcome::Applied { .. } | Outcome::AlreadyRouted { .. }))
+        {
             inner.routing_available = true;
         }
     }
 
-    /// Relê só as sessões (dispositivo atual de cada uma). Erro de leitura mantém o último valor.
-    fn reread_sessions(&self, inner: &mut Inner) {
-        if let Ok(sessions) = self.source.sessions() {
-            inner.sessions = sessions;
+    /// Põe o dispositivo novo nas sessões (dos `pids`, no sentido) que o sistema acabou de rotear.
+    fn patch_sessions(&self, pids: &[u32], flow: Flow, device: &DeviceId) {
+        let mut inner = self.lock();
+        for session in inner
+            .sessions
+            .iter_mut()
+            .filter(|s| s.flow == flow && pids.contains(&s.pid))
+        {
+            session.device = device.clone();
         }
     }
+
+    /// Monta o estado e avisa a interface. Só o `emit` é segurado: estados saem na ordem em que foram montados.
+    fn emit(&self) {
+        let _emit = guard(&self.emit);
+        let state = build_state(&self.lock());
+        (self.notify)(&state);
+    }
+
+    /// Grava uma seção do estado. O valor é copiado sob `inner` e a escrita roda fora dele.
+    /// `persist` serializa as escritas: a última a acontecer leva o estado mais novo.
+    fn persist<T: Serialize>(&self, name: &str, snapshot: impl FnOnce(&Inner) -> T) {
+        let _write = guard(&self.persist);
+        let value = snapshot(&self.lock());
+        let error = write_document(&self.store, name, &value);
+        self.lock().save_error = error;
+    }
+}
+
+fn guard<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
+    // Veneno do travamento: o estado continua válido o bastante para seguir.
+    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Limpa a rota de cada sessão do executável no sentido. Falha numa sessão (ex.: já
@@ -340,15 +505,15 @@ fn clear_sessions(
     }
 }
 
-/// Grava um documento e atualiza `save_error`: mensagem quando a gravação falha, `None`
-/// quando dá certo (a próxima gravação bem-sucedida limpa o erro). A falha também vai para
-/// o stderr. O estado em memória segue válido e a próxima mudança tenta de novo.
-fn persist<T: Serialize>(store: &Store, save_error: &mut Option<String>, name: &str, value: &T) {
+/// Grava um documento. Devolve a mensagem quando a gravação falha (vai para o stderr também);
+/// `None` quando dá certo. A próxima gravação bem-sucedida limpa o erro. O estado em memória
+/// segue válido e a próxima mudança tenta de novo.
+fn write_document<T: Serialize>(store: &Store, name: &str, value: &T) -> Option<String> {
     match store.save(name, value) {
-        Ok(()) => *save_error = None,
+        Ok(()) => None,
         Err(err) => {
             eprintln!("sonar: não foi possível gravar {name}.json: {err}");
-            *save_error = Some(format!("Não foi possível gravar {name}.json: {err}"));
+            Some(format!("Não foi possível gravar {name}.json: {err}"))
         }
     }
 }
@@ -378,8 +543,8 @@ fn has_empty_device(target: &Target) -> bool {
 
 /// Monta o snapshot para a interface. Um dispositivo aparece se estiver conectado, se
 /// alguma regra apontar para ele ou se tiver metadado; o resto (Windows lembra de
-/// muitos dispositivos antigos) fica de fora.
-fn build_state(inner: &Inner, ctl: &dyn EndpointControl) -> AppState {
+/// muitos dispositivos antigos) fica de fora. Não fala com o sistema.
+fn build_state(inner: &Inner) -> AppState {
     let devices = inner
         .devices
         .iter()
@@ -390,14 +555,11 @@ fn build_state(inner: &Inner, ctl: &dyn EndpointControl) -> AppState {
                 return None;
             }
             let meta = inner.meta.get(&d.id.0).cloned().unwrap_or_default();
-            // Endpoint desconectado não tem volume para ler: mostra o padrão.
-            let (volume, muted) = if d.connected {
-                (
-                    ctl.volume(&d.id).unwrap_or(1.0),
-                    ctl.muted(&d.id).unwrap_or(false),
-                )
+            // Endpoint desconectado não tem volume para mostrar: mostra o padrão.
+            let level = if d.connected {
+                inner.levels.get(&d.id.0).copied().unwrap_or_default()
             } else {
-                (1.0, false)
+                Level::default()
             };
             Some(DeviceView {
                 id: d.id.clone(),
@@ -410,8 +572,8 @@ fn build_state(inner: &Inner, ctl: &dyn EndpointControl) -> AppState {
                 connected: d.connected,
                 is_default: d.is_default,
                 has_rules,
-                volume,
-                muted,
+                volume: level.volume,
+                muted: level.muted,
             })
         })
         .collect();
@@ -449,11 +611,22 @@ mod tests {
         devices: Mutex<Vec<Device>>,
         sessions: Mutex<Vec<AudioSession>>,
         fail_reads: AtomicBool,
+        /// Quantas vezes `devices()` e `sessions()` foram chamados (releituras completas).
+        device_reads: AtomicUsize,
+        session_reads: AtomicUsize,
     }
 
     impl FakeSource {
         fn set_devices(&self, devices: Vec<Device>) {
             *self.devices.lock().unwrap() = devices;
+        }
+
+        fn device_reads(&self) -> usize {
+            self.device_reads.load(Ordering::SeqCst)
+        }
+
+        fn session_reads(&self) -> usize {
+            self.session_reads.load(Ordering::SeqCst)
         }
 
         fn set_sessions(&self, sessions: Vec<AudioSession>) {
@@ -475,6 +648,7 @@ mod tests {
 
     impl AudioSource for FakeSource {
         fn devices(&self) -> Result<Vec<Device>, AudioError> {
+            self.device_reads.fetch_add(1, Ordering::SeqCst);
             if self.fail_reads.load(Ordering::SeqCst) {
                 return Err(AudioError::Os(-1));
             }
@@ -482,6 +656,7 @@ mod tests {
         }
 
         fn sessions(&self) -> Result<Vec<AudioSession>, AudioError> {
+            self.session_reads.fetch_add(1, Ordering::SeqCst);
             if self.fail_reads.load(Ordering::SeqCst) {
                 return Err(AudioError::Os(-1));
             }
@@ -569,11 +744,17 @@ mod tests {
         fail_reads: AtomicBool,
         /// Escritas falham quando verdadeiro; a chamada continua gravada.
         fail_writes: AtomicBool,
+        /// Leituras feitas (volume, mudo, pico), para provar que a escolha de rota não as repete.
+        reads: AtomicUsize,
     }
 
     impl FakeCtl {
         fn calls(&self) -> Vec<CtlCall> {
             self.calls.lock().unwrap().clone()
+        }
+
+        fn reads(&self) -> usize {
+            self.reads.load(Ordering::SeqCst)
         }
 
         fn set_volume_of(&self, id: &str, v: f32) {
@@ -597,6 +778,7 @@ mod tests {
         }
 
         fn read_guard(&self) -> Result<(), AudioError> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
             if self.fail_reads.load(Ordering::SeqCst) {
                 return Err(AudioError::Os(-2));
             }
@@ -798,6 +980,8 @@ mod tests {
             session(10, "chrome.exe", Flow::Render, "alto"),
             session(11, "chrome.exe", Flow::Render, "alto"),
         ]);
+        // Estado de regime: a interface já leu o sistema antes de o usuário escolher.
+        engine.refresh();
         let before = world.notes();
 
         engine.set_app_route("Chrome.EXE", Flow::Render, Some(dev_id("fone")));
@@ -822,13 +1006,18 @@ mod tests {
         save_rules(dir.path(), vec![rule("chrome.exe", Flow::Render, "fone")]);
         let world = World::new();
         let engine = world.engine_at(dir.path());
-        world
-            .source
-            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world.source.set_devices(vec![
+            device("fone", Flow::Render, true, "Fone"),
+            Device {
+                is_default: true,
+                ..device("padrao", Flow::Render, true, "Padrao")
+            },
+        ]);
         world
             .source
             .set_sessions(vec![session(10, "chrome.exe", Flow::Render, "fone")]);
         world.backend.preset_route(10, &dev_id("fone"));
+        engine.refresh();
         let before = world.notes();
 
         engine.set_app_route("chrome.exe", Flow::Render, None);
@@ -1510,5 +1699,141 @@ mod tests {
         assert_eq!(engine.state().save_error, None);
         let on_disk: RuleSet = Store::open(blocked.clone()).load("rules");
         assert_eq!(on_disk.rules, vec![rule("chrome.exe", Flow::Render, "fone")]);
+    }
+
+    #[test]
+    fn set_app_route_does_not_reenumerate_devices_or_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(10, "chrome.exe", Flow::Render, "alto")]);
+        engine.refresh();
+        let devices_before = world.source.device_reads();
+        let sessions_before = world.source.session_reads();
+
+        engine.set_app_route("chrome.exe", Flow::Render, Some(dev_id("fone")));
+
+        assert_eq!(world.source.device_reads(), devices_before);
+        assert_eq!(world.source.session_reads(), sessions_before);
+        assert_eq!(
+            world.backend.set_calls(),
+            vec![(10, Flow::Render, dev_id("fone"))]
+        );
+    }
+
+    #[test]
+    fn set_app_route_does_not_read_endpoint_volume_or_mute() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![
+            device("fone", Flow::Render, true, "Fone"),
+            device("alto", Flow::Render, true, "Alto"),
+        ]);
+        world
+            .source
+            .set_sessions(vec![session(10, "chrome.exe", Flow::Render, "alto")]);
+        engine.refresh();
+        let reads_before = world.ctl.reads();
+
+        engine.set_app_route("chrome.exe", Flow::Render, Some(dev_id("fone")));
+        let _ = engine.state();
+
+        assert_eq!(world.ctl.reads(), reads_before);
+    }
+
+    #[test]
+    fn set_app_route_only_routes_sessions_of_that_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world.source.set_sessions(vec![
+            session(10, "chrome.exe", Flow::Render, "alto"),
+            session(11, "spotify.exe", Flow::Render, "alto"),
+        ]);
+        engine.refresh();
+
+        engine.set_app_route("chrome.exe", Flow::Render, Some(dev_id("fone")));
+
+        assert_eq!(
+            world.backend.set_calls(),
+            vec![(10, Flow::Render, dev_id("fone"))]
+        );
+        let spotify = engine
+            .state()
+            .sessions
+            .into_iter()
+            .find(|s| s.pid == 11)
+            .unwrap();
+        assert_eq!(spotify.device, dev_id("alto"));
+    }
+
+    #[test]
+    fn set_app_route_patches_the_cached_session_device_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(10, "chrome.exe", Flow::Render, "alto")]);
+        engine.refresh();
+
+        engine.set_app_route("chrome.exe", Flow::Render, Some(dev_id("fone")));
+
+        let chrome = engine.state().sessions.into_iter().find(|s| s.pid == 10).unwrap();
+        assert_eq!(chrome.device, dev_id("fone"));
+    }
+
+    #[test]
+    fn rule_set_before_its_session_exists_is_applied_by_next_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        engine.refresh();
+
+        // Ainda não há sessão do app em cache: a regra é gravada e nada é roteado.
+        engine.set_app_route("chrome.exe", Flow::Render, Some(dev_id("fone")));
+        assert!(world.backend.set_calls().is_empty());
+
+        world
+            .source
+            .set_sessions(vec![session(10, "chrome.exe", Flow::Render, "alto")]);
+        engine.refresh();
+
+        assert_eq!(
+            world.backend.set_calls(),
+            vec![(10, Flow::Render, dev_id("fone"))]
+        );
+    }
+
+    #[test]
+    fn set_device_volume_does_not_read_the_endpoint_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        engine.refresh();
+        let reads_before = world.ctl.reads();
+
+        engine.set_device_volume(&dev_id("fone"), 0.3).unwrap();
+
+        assert_eq!(world.ctl.reads(), reads_before);
+        assert_eq!(engine.state().devices[0].volume, 0.3);
     }
 }
