@@ -7,6 +7,7 @@ import { Icon } from "../components/Icon";
 import { useToast } from "../components/Toast";
 import { VolumeSlider } from "../components/VolumeSlider";
 import type { AppState } from "../types";
+import { visibleDevices } from "./devicesModel";
 import {
   appName,
   attempt,
@@ -25,7 +26,7 @@ export { groupSessions, type AppRow } from "./model";
 export function OutputTab({ state }: { state: AppState }) {
   const [silentOpen, setSilentOpen] = useState(false);
   const notify = useToast();
-  const outputs = state.devices.filter((d) => d.flow === "render" && d.connected && !d.hidden);
+  const outputs = visibleDevices(state.devices).filter((d) => d.flow === "render");
   const defaultDevice = state.devices.find((d) => d.flow === "render" && d.is_default);
   const { active, silent } = groupSessions(state.sessions, "render");
   const nothingPlaying = active.length === 0 && silent.length === 0;

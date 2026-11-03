@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Icon } from "../components/Icon";
+import { IconButton } from "../components/IconButton";
 import { Tabs } from "../components/Tabs";
 import type { PanelTab } from "../routes";
 import { useAppState } from "../store";
@@ -12,13 +13,21 @@ interface PanelProps {
   onAddProfile: () => void;
   /** Abre o editor de um perfil existente. */
   onEditProfile: (profileId: string) => void;
+  /** Engrenagem: abre Configurações. */
+  onOpenSettings: () => void;
   /** Aba escolhida. Vem da rota, para sobreviver a uma troca de tela. */
   tab: PanelTab;
   onTabChange: (tab: PanelTab) => void;
 }
 
 /** Painel principal (mockups A e A2): perfis, avisos, abas Saída | Microfone. */
-export function Panel({ onAddProfile, onEditProfile, tab, onTabChange }: PanelProps) {
+export function Panel({
+  onAddProfile,
+  onEditProfile,
+  onOpenSettings,
+  tab,
+  onTabChange,
+}: PanelProps) {
   const state = useAppState();
 
   return (
@@ -43,14 +52,24 @@ export function Panel({ onAddProfile, onEditProfile, tab, onTabChange }: PanelPr
         </Banner>
       )}
 
-      <Tabs
-        items={[
-          { id: "output", label: "Saída", icon: <Icon name="volume-2" size={17} /> },
-          { id: "mic", label: "Microfone", icon: <Icon name="mic" size={17} /> },
-        ]}
-        active={tab}
-        onChange={(id) => onTabChange(id === "mic" ? "mic" : "output")}
-      />
+      <div className="row">
+        <div className="tabs-row">
+          <Tabs
+            items={[
+              { id: "output", label: "Saída", icon: <Icon name="volume-2" size={17} /> },
+              { id: "mic", label: "Microfone", icon: <Icon name="mic" size={17} /> },
+            ]}
+            active={tab}
+            onChange={(id) => onTabChange(id === "mic" ? "mic" : "output")}
+          />
+        </div>
+        <IconButton
+          label="Configurações"
+          icon={<Icon name="settings" size={17} />}
+          size={34}
+          onPress={onOpenSettings}
+        />
+      </div>
 
       {tab === "output" ? <OutputTab state={state} /> : <MicTab state={state} />}
     </>

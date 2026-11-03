@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import * as api from "../api";
 import { AppLogo } from "../components/AppLogo";
 import { Card } from "../components/Card";
@@ -7,6 +6,7 @@ import { Icon } from "../components/Icon";
 import { useToast } from "../components/Toast";
 import { VolumeSlider } from "../components/VolumeSlider";
 import type { AppState } from "../types";
+import { useMicPeak } from "./useMicPeak";
 import {
   appName,
   attempt,
@@ -37,29 +37,8 @@ export function MicTab({ state }: { state: AppState }) {
   const mic = state.devices.find((d) => d.flow === "capture" && d.is_default);
   const { active } = groupSessions(state.sessions, "capture");
   const micId = mic?.id ?? null;
-  const [peak, setPeak] = useState(0);
+  const peak = useMicPeak(micId);
   const notify = useToast();
-
-  // Medidor: assina `mic-level` só enquanto esta aba está na tela; cancela ao sair.
-  useEffect(() => {
-    if (micId === null) return;
-    let alive = true;
-    let unlisten: (() => void) | undefined;
-    api
-      .onMicLevel((level) => {
-        if (alive && level.id === micId) setPeak(level.peak);
-      })
-      .then((stop) => {
-        if (alive) unlisten = stop;
-        else stop();
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-      unlisten?.();
-      setPeak(0);
-    };
-  }, [micId]);
 
   const db = peakToDb(peak);
   const lit = litSegments(db);

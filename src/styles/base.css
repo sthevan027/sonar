@@ -1012,3 +1012,173 @@ button:focus-visible {
 .pick:focus-visible {
   background: var(--panel);
 }
+
+/* ---- Dispositivos e configurações (Task 13): medidas de docs/mockups/D.html, D2.html e E.html. ---- */
+
+/* Abas do painel ocupam o resto da linha; a engrenagem fica na ponta. */
+.tabs-row {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Estado do cartão: verde quando conectado, apagado quando não. */
+.st {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--mute);
+}
+
+.st.live {
+  color: var(--live);
+}
+
+.st i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  display: block;
+  flex: none;
+}
+
+.act {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* Ícones escolhidos para o dispositivo (38 px cada, sem esticar). */
+.dev-icons {
+  display: flex;
+  gap: 8px;
+}
+
+/* Restaurar nome original do Windows. */
+.rst {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+/* Troca do padrão: lista de dispositivos conectados. */
+.dev-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pick.on {
+  color: var(--brass);
+}
+
+.pick > span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Grupo de linhas (Configurações). */
+.grp {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.it {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  width: 100%;
+  text-align: left;
+}
+
+.it + .it {
+  border-top: 1px solid var(--line);
+}
+
+button.it:hover {
+  background: var(--panel);
+}
+
+.stile {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--mute);
+}
+
+.stile.brass {
+  color: var(--brass);
+}
+
+.it .tx {
+  flex: 1;
+  min-width: 0;
+}
+
+.it .tx b {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.it .tx span {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+.it .tx span.bad {
+  color: var(--danger);
+}
+
+/* Atalho: teclas em caixinha (Win, Alt, V). */
+.keys-btn {
+  display: flex;
+  gap: 5px;
+  flex: none;
+  min-height: 28px;
+  align-items: center;
+}
+
+.keys-btn:disabled {
+  opacity: 0.5;
+}
+
+.k {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.keys-hint {
+  font-size: 12px;
+  color: var(--brass);
+  white-space: nowrap;
+}
