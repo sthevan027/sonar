@@ -118,7 +118,7 @@ fn windows_build() -> Option<u32> {
 }
 
 #[cfg(windows)]
-fn ensure_com() -> Result<(), AudioError> {
+pub(super) fn ensure_com() -> Result<(), AudioError> {
     // SAFETY: inicialização de COM da thread chamadora; sem ponteiro reservado.
     let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     // is_ok cobre S_OK e S_FALSE (já inicializado no mesmo modelo).

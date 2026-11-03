@@ -3202,6 +3202,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "windows",
+ "windows-core",
 ]
 
 [[package]]
