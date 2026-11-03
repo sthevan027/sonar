@@ -27,7 +27,7 @@ interface SettingsProps {
  */
 let settingsQueue: Promise<void> = Promise.resolve();
 
-function enqueueSettings(call: () => Promise<void>, onFail: () => void) {
+function enqueueSettings(call: () => Promise<void>, onFail: (error: unknown) => void) {
   settingsQueue = settingsQueue.then(() => call().catch(onFail));
 }
 
