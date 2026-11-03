@@ -17,6 +17,7 @@
     "@fontsource/bricolage-grotesque": "^5.3.0",
     "@fontsource/dm-sans": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
+    "@tauri-apps/api": "^2.12.4",
     "react": "^19",
     "react-dom": "^19"
   },
