@@ -12,6 +12,7 @@ mod state;
 mod engine;
 mod commands;
 mod apps;
+mod updates;
 
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
@@ -46,6 +47,8 @@ pub fn run() {
             shell::show_panel(app);
         }))
         .plugin(tauri_plugin_dialog::init())
+        // Atualização: checa o endpoint de `plugins.updater` (tauri.conf.json) e verifica a assinatura.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // O atalho global alterna o painel pelo mesmo caminho da bandeja (shell::toggle_from_shortcut).
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -59,6 +62,8 @@ pub fn run() {
         .setup(|app| {
             shell::setup(app)?;
             start_engine(app)?;
+            app.manage(updates::UpdateState::default());
+            updates::start_background_checks(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -78,6 +83,9 @@ pub fn run() {
             commands::list_running_apps,
             commands::app_icon,
             commands::set_blur_hide_suspended,
+            updates::check_for_update,
+            updates::install_update,
+            updates::pending_update,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar o Sonar");
