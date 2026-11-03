@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Sentido do fluxo de áudio: saída (render) ou entrada (capture).
+/// Na serialização vira `"render"` / `"capture"`, como a interface espera.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Flow {
     Render,
     Capture,
@@ -35,7 +37,7 @@ pub struct Device {
 }
 
 /// Sessão de áudio de um processo num endpoint.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AudioSession {
     pub pid: u32,
     /// Nome do executável em minúsculo, só o nome do arquivo (ex.: `spotify.exe`).

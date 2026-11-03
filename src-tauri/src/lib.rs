@@ -7,6 +7,10 @@ mod rules;
 mod store;
 #[allow(dead_code)] // Task 9 consome o perfil; até lá só os testes o usam.
 mod profiles;
+#[allow(dead_code)] // Task 9b expõe o estado nos comandos do Tauri; até lá só os testes o usam.
+mod state;
+#[allow(dead_code)] // Task 9b cria o Engine no setup; até lá só os testes o usam.
+mod engine;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
