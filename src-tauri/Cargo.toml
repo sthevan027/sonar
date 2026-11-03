@@ -18,6 +18,8 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
+# Atualização automática (updates.rs): checa o latest.json e instala a versão assinada.
+tauri-plugin-updater = "2.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "5"
