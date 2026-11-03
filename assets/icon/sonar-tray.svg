@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Sonar (bandeja)">
+  <g fill="none" stroke="#E3B04F" stroke-width="38" stroke-linecap="round">
+    <path d="M213.6 327.6 A66 66 0 1 1 298.4 327.6"/>
+    <path d="M173.7 375.0 A128 128 0 1 1 338.3 375.0"/>
+    <path d="M133.9 422.5 A190 190 0 1 1 378.1 422.5"/>
+  </g>
+  <circle cx="256" cy="277" r="30" fill="#E3B04F"/>
+</svg>
