@@ -162,7 +162,11 @@ fn contained<T: Default>(label: &str, f: impl FnOnce() -> T) -> T {
     }
 }
 
+/// Aplica atalho e "Iniciar com o Windows" antes de gravar. Falha devolve a frase para a tela
+/// e nada é gravado.
 #[tauri::command(async)]
-pub fn save_settings(engine: Eng<'_>, settings: Settings) {
+pub fn save_settings(app: AppHandle, engine: Eng<'_>, settings: Settings) -> Result<(), String> {
+    shell::apply_settings(&app, &engine.settings(), &settings)?;
     engine.save_settings(settings);
+    Ok(())
 }

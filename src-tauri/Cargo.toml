@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "5"
@@ -24,6 +25,8 @@ directories = "5"
 png = "0.18"
 
 [target.'cfg(windows)'.dependencies]
+# "Iniciar com o Windows" (shell.rs): chave HKCU\...\Run. Já estava no Cargo.lock via tauri.
+winreg = "0.56"
 # Roteamento por app (audio/policy.rs): ativação WinRT, vtable do AudioPolicyConfig e build via RtlGetVersion.
 windows = { version = "0.62", features = [
   "Win32_Foundation",

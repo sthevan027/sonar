@@ -1,4 +1,5 @@
 mod shell;
+mod shell_geometry;
 #[allow(dead_code)] // Tasks seguintes consomem o roteador; até lá só os testes o usam.
 mod audio;
 #[allow(dead_code)] // Task 9 consome as regras; até lá só os testes o usam.
@@ -45,6 +46,16 @@ pub fn run() {
             shell::show_panel(app);
         }))
         .plugin(tauri_plugin_dialog::init())
+        // O atalho global alterna o painel pelo mesmo caminho da bandeja (shell::toggle_from_shortcut).
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        shell::toggle_from_shortcut(app);
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             shell::setup(app)?;
             start_engine(app)?;
@@ -97,6 +108,8 @@ fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
         }),
     ));
     app.manage(engine.clone());
+    // Atalho e "Iniciar com o Windows" guardados valem desde a abertura.
+    shell::apply_at_startup(&app_handle, &engine.settings());
 
     // Leitura inicial fora da thread principal (COM e o enumerador podem demorar).
     {
