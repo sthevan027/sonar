@@ -71,4 +71,6 @@ pub struct AppState {
     pub routing_available: bool,
     /// Último perfil ativado nesta execução (não persistido).
     pub last_profile: Option<String>,
+    /// Mensagem quando a última gravação em disco falhou; `null` quando está tudo gravado.
+    pub save_error: Option<String>,
 }

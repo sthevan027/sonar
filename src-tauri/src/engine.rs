@@ -26,6 +26,8 @@ struct Inner {
     meta: BTreeMap<String, DeviceMeta>,
     routing_available: bool,
     last_profile: Option<String>,
+    /// Mensagem da última gravação que falhou; `None` quando a última gravação deu certo.
+    save_error: Option<String>,
 }
 
 pub struct Engine {
@@ -64,6 +66,7 @@ impl Engine {
             meta: meta.into_iter().filter(|(_, m)| m.is_meaningful()).collect(),
             routing_available: true,
             last_profile: None,
+            save_error: None,
         };
         Engine {
             source,
@@ -102,10 +105,11 @@ impl Engine {
                 }),
                 None => inner.rules.remove(&exe, flow),
             }
-            self.persist("rules", &inner.rules);
+            persist(&self.store, &mut inner.save_error, "rules", &inner.rules);
             self.sync(inner);
             if clearing {
                 clear_sessions(self.backend.as_ref(), &inner.sessions, &exe, flow);
+                self.reread_sessions(inner);
             }
             build_state(inner)
         };
@@ -123,13 +127,18 @@ impl Engine {
             let mut rules = inner.rules.clone();
             let changes = profiles::activate(&profile, &mut rules);
             inner.rules = rules;
-            self.persist("rules", &inner.rules);
+            persist(&self.store, &mut inner.save_error, "rules", &inner.rules);
             // As regras novas (`Change::Set`) entram pelo `sync`; as limpezas são feitas aqui.
             self.sync(inner);
+            let mut cleared = false;
             for change in changes {
                 if let Change::Cleared { exe, flow } = change {
                     clear_sessions(self.backend.as_ref(), &inner.sessions, &exe, flow);
+                    cleared = true;
                 }
+            }
+            if cleared {
+                self.reread_sessions(inner);
             }
             inner.last_profile = Some(id.to_string());
             build_state(inner)
@@ -149,7 +158,7 @@ impl Engine {
                 Some(existing) => *existing = p,
                 None => inner.profiles.push(p),
             }
-            self.persist("profiles", &inner.profiles);
+            persist(&self.store, &mut inner.save_error, "profiles", &inner.profiles);
             build_state(inner)
         };
         (self.notify)(&state);
@@ -164,7 +173,7 @@ impl Engine {
             if inner.last_profile.as_deref() == Some(id) {
                 inner.last_profile = None;
             }
-            self.persist("profiles", &inner.profiles);
+            persist(&self.store, &mut inner.save_error, "profiles", &inner.profiles);
             build_state(inner)
         };
         (self.notify)(&state);
@@ -193,7 +202,7 @@ impl Engine {
             } else {
                 inner.meta.remove(&id.0);
             }
-            self.persist("devices", &inner.meta);
+            persist(&self.store, &mut inner.save_error, "devices", &inner.meta);
             build_state(inner)
         };
         (self.notify)(&state);
@@ -209,7 +218,7 @@ impl Engine {
             let mut guard = self.lock();
             let inner = &mut *guard;
             inner.settings = s;
-            self.persist("settings", &inner.settings);
+            persist(&self.store, &mut inner.save_error, "settings", &inner.settings);
             build_state(inner)
         };
         (self.notify)(&state);
@@ -242,11 +251,10 @@ impl Engine {
         );
         if outcomes.iter().any(|o| matches!(o, Outcome::Applied { .. })) {
             // Uma rota recém-gravada muda o dispositivo da sessão: relê para não mostrar o antigo.
-            if let Ok(sessions) = self.source.sessions() {
-                inner.sessions = sessions;
-            }
+            self.reread_sessions(inner);
         }
-        inner.routing_available = !outcomes.iter().any(|o| {
+        // Trava: cai no primeiro Unsupported e só volta com um roteamento bem-sucedido.
+        if outcomes.iter().any(|o| {
             matches!(
                 o,
                 Outcome::Skipped {
@@ -254,14 +262,19 @@ impl Engine {
                     ..
                 }
             )
-        });
+        }) {
+            inner.routing_available = false;
+        } else if outcomes.iter().any(|o| {
+            matches!(o, Outcome::Applied { .. } | Outcome::AlreadyRouted { .. })
+        }) {
+            inner.routing_available = true;
+        }
     }
 
-    /// Grava no disco. Falha não derruba o app: o estado em memória segue válido e a
-    /// próxima mudança tenta gravar de novo.
-    fn persist<T: Serialize>(&self, name: &str, value: &T) {
-        if let Err(err) = self.store.save(name, value) {
-            eprintln!("sonar: não foi possível gravar {name}.json: {err}");
+    /// Relê só as sessões (dispositivo atual de cada uma). Erro de leitura mantém o último valor.
+    fn reread_sessions(&self, inner: &mut Inner) {
+        if let Ok(sessions) = self.source.sessions() {
+            inner.sessions = sessions;
         }
     }
 }
@@ -279,6 +292,19 @@ fn clear_sessions(
         .filter(|s| s.flow == flow && s.exe.eq_ignore_ascii_case(exe))
     {
         let _ = backend.clear_route(session.pid, flow);
+    }
+}
+
+/// Grava um documento e atualiza `save_error`: mensagem quando a gravação falha, `None`
+/// quando dá certo (a próxima gravação bem-sucedida limpa o erro). A falha também vai para
+/// o stderr. O estado em memória segue válido e a próxima mudança tenta de novo.
+fn persist<T: Serialize>(store: &Store, save_error: &mut Option<String>, name: &str, value: &T) {
+    match store.save(name, value) {
+        Ok(()) => *save_error = None,
+        Err(err) => {
+            eprintln!("sonar: não foi possível gravar {name}.json: {err}");
+            *save_error = Some(format!("Não foi possível gravar {name}.json: {err}"));
+        }
     }
 }
 
@@ -341,6 +367,7 @@ fn build_state(inner: &Inner) -> AppState {
         settings: inner.settings.clone(),
         routing_available: inner.routing_available,
         last_profile: inner.last_profile.clone(),
+        save_error: inner.save_error.clone(),
     }
 }
 
@@ -376,6 +403,18 @@ mod tests {
         fn set_sessions(&self, sessions: Vec<AudioSession>) {
             *self.sessions.lock().unwrap() = sessions;
         }
+
+        fn move_session(&self, pid: u32, flow: Flow, device: &DeviceId) {
+            for session in self
+                .sessions
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .filter(|s| s.pid == pid && s.flow == flow)
+            {
+                session.device = device.clone();
+            }
+        }
     }
 
     impl AudioSource for FakeSource {
@@ -402,6 +441,9 @@ mod tests {
         clear_calls: Mutex<Vec<(u32, Flow)>>,
         /// Quando verdadeiro, `set_route` devolve `Unsupported`.
         unsupported: AtomicBool,
+        /// Fonte espelhada: após gravar ou limpar uma rota, a sessão do PID passa para o
+        /// dispositivo novo (limpar leva ao padrão `padrao`), como o Windows faria.
+        mirror: Mutex<Option<Arc<FakeSource>>>,
     }
 
     impl FakeBackend {
@@ -416,6 +458,12 @@ mod tests {
         fn preset_route(&self, pid: u32, device: &DeviceId) {
             self.routes.lock().unwrap().insert(pid, device.clone());
         }
+
+        fn mirror_to(&self, pid: u32, flow: Flow, device: &DeviceId) {
+            if let Some(source) = self.mirror.lock().unwrap().as_ref() {
+                source.move_session(pid, flow, device);
+            }
+        }
     }
 
     impl RouteBackend for FakeBackend {
@@ -428,12 +476,14 @@ mod tests {
                 return Err(AudioError::Unsupported("teste".into()));
             }
             self.routes.lock().unwrap().insert(pid, device.clone());
+            self.mirror_to(pid, flow, device);
             Ok(())
         }
 
         fn clear_route(&self, pid: u32, flow: Flow) -> Result<(), AudioError> {
             self.clear_calls.lock().unwrap().push((pid, flow));
             self.routes.lock().unwrap().remove(&pid);
+            self.mirror_to(pid, flow, &dev_id("padrao"));
             Ok(())
         }
 
@@ -487,9 +537,12 @@ mod tests {
 
     impl World {
         fn new() -> World {
+            let source = Arc::new(FakeSource::default());
+            let backend = Arc::new(FakeBackend::default());
+            *backend.mirror.lock().unwrap() = Some(source.clone());
             World {
-                source: Arc::new(FakeSource::default()),
-                backend: Arc::new(FakeBackend::default()),
+                source,
+                backend,
                 notes: Arc::new(AtomicUsize::new(0)),
             }
         }
@@ -646,6 +699,8 @@ mod tests {
 
         assert!(engine.state().rules.is_empty());
         assert_eq!(world.backend.clear_calls(), vec![(10, Flow::Render)]);
+        // A sessão já aparece no padrão do Windows, não no dispositivo antigo.
+        assert_eq!(engine.state().sessions[0].device, dev_id("padrao"));
         assert!(world.backend.set_calls().is_empty());
         let on_disk: RuleSet = Store::open(dir.path().to_path_buf()).load("rules");
         assert!(on_disk.rules.is_empty());
@@ -688,6 +743,13 @@ mod tests {
             vec![(20, Flow::Render, dev_id("fone"))]
         );
         assert_eq!(world.backend.clear_calls(), vec![(21, Flow::Capture)]);
+        let capture = engine
+            .state()
+            .sessions
+            .into_iter()
+            .find(|s| s.pid == 21)
+            .unwrap();
+        assert_eq!(capture.device, dev_id("padrao"));
         assert_eq!(engine.state().last_profile.as_deref(), Some("p1"));
         let on_disk: RuleSet = Store::open(dir.path().to_path_buf()).load("rules");
         assert_eq!(on_disk.rules, vec![rule("game.exe", Flow::Render, "fone")]);
@@ -918,5 +980,189 @@ mod tests {
         let state = engine.state();
         assert_eq!(device_ids(&state), vec!["fone".to_string()]);
         assert_eq!(state.sessions.len(), 1);
+    }
+
+    #[test]
+    fn routing_unavailable_latches_until_a_route_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        save_rules(dir.path(), vec![rule("game.exe", Flow::Render, "fone")]);
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(30, "game.exe", Flow::Render, "alto")]);
+        world.backend.unsupported.store(true, Ordering::SeqCst);
+        engine.refresh();
+        assert!(!engine.state().routing_available);
+
+        // Sem sessão casando com regra não há resultados: continua falso.
+        world.source.set_sessions(vec![]);
+        engine.refresh();
+        assert!(!engine.state().routing_available);
+
+        // Só um roteamento bem-sucedido religa.
+        world.backend.unsupported.store(false, Ordering::SeqCst);
+        world
+            .source
+            .set_sessions(vec![session(30, "game.exe", Flow::Render, "alto")]);
+        engine.refresh();
+        assert!(engine.state().routing_available);
+    }
+
+    #[test]
+    fn rule_for_absent_device_is_kept_and_reapplied_when_it_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        save_rules(dir.path(), vec![rule("chrome.exe", Flow::Render, "monitor")]);
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        // Monitor ausente da lista do Windows.
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(10, "chrome.exe", Flow::Render, "alto")]);
+        engine.refresh();
+
+        assert!(world.backend.set_calls().is_empty());
+        let state = engine.state();
+        assert_eq!(state.rules, vec![rule("chrome.exe", Flow::Render, "monitor")]);
+        assert_eq!(state.save_error, None);
+
+        // Presente, mas desconectado: continua sem aplicar e sem erro.
+        world.source.set_devices(vec![
+            device("fone", Flow::Render, true, "Fone"),
+            device("monitor", Flow::Render, false, "Monitor"),
+        ]);
+        engine.refresh();
+        assert!(world.backend.set_calls().is_empty());
+        assert_eq!(engine.state().rules.len(), 1);
+        assert_eq!(engine.state().save_error, None);
+
+        // Volta conectado: o próximo refresh aplica a regra.
+        world.source.set_devices(vec![
+            device("fone", Flow::Render, true, "Fone"),
+            device("monitor", Flow::Render, true, "Monitor"),
+        ]);
+        engine.refresh();
+        assert_eq!(
+            world.backend.set_calls(),
+            vec![(10, Flow::Render, dev_id("monitor"))]
+        );
+        assert_eq!(engine.state().save_error, None);
+    }
+
+    #[test]
+    fn app_state_json_shape_is_pinned() {
+        let state = AppState {
+            devices: vec![DeviceView {
+                id: dev_id("fone"),
+                flow: Flow::Render,
+                windows_name: "Alto".into(),
+                name: Some("Monitor".into()),
+                display_name: "Monitor".into(),
+                icon: None,
+                hidden: false,
+                connected: true,
+                is_default: true,
+                has_rules: true,
+            }],
+            sessions: vec![session(10, "chrome.exe", Flow::Render, "fone")],
+            rules: vec![rule("chrome.exe", Flow::Render, "fone")],
+            profiles: vec![profile("p1", vec![])],
+            settings: Settings::default(),
+            routing_available: true,
+            last_profile: Some("p1".into()),
+            save_error: None,
+        };
+
+        let json = serde_json::to_value(&state).unwrap();
+        let keys = |v: &serde_json::Value| -> Vec<String> {
+            let mut keys: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(
+            keys(&json),
+            vec![
+                "devices",
+                "last_profile",
+                "profiles",
+                "routing_available",
+                "rules",
+                "save_error",
+                "sessions",
+                "settings",
+            ]
+        );
+        assert_eq!(json["save_error"], serde_json::Value::Null);
+        assert_eq!(json["routing_available"], true);
+        assert_eq!(json["last_profile"], "p1");
+
+        let device_json = &json["devices"][0];
+        assert_eq!(
+            keys(device_json),
+            vec![
+                "connected",
+                "display_name",
+                "flow",
+                "has_rules",
+                "hidden",
+                "icon",
+                "id",
+                "is_default",
+                "name",
+                "windows_name",
+            ]
+        );
+        assert_eq!(device_json["flow"], "render");
+        assert_eq!(device_json["display_name"], "Monitor");
+
+        let session_json = &json["sessions"][0];
+        assert_eq!(
+            keys(session_json),
+            vec!["active", "device", "exe", "flow", "muted", "pid", "volume"]
+        );
+        assert_eq!(session_json["flow"], "render");
+        assert_eq!(json["rules"][0]["flow"], "render");
+
+        assert_eq!(json["settings"]["shortcut"], "Super+Alt+V");
+        assert_eq!(json["settings"]["autostart"], false);
+
+        let mut with_error = state.clone();
+        with_error.save_error = Some("falhou".into());
+        assert_eq!(
+            serde_json::to_value(&with_error).unwrap()["save_error"],
+            "falhou"
+        );
+    }
+
+    #[test]
+    fn failed_save_is_reported_and_cleared_by_next_success() {
+        let dir = tempfile::tempdir().unwrap();
+        // Um arquivo no lugar do diretório de dados: toda gravação falha.
+        let blocked = dir.path().join("dados");
+        std::fs::write(&blocked, b"arquivo no lugar do diretorio").unwrap();
+        let world = World::new();
+        let engine = world.engine_at(&blocked);
+        let before = world.notes();
+
+        engine.set_app_route("chrome.exe", Flow::Render, Some(dev_id("fone")));
+
+        let error = engine.state().save_error;
+        assert!(error.as_deref().unwrap_or("").contains("rules.json"));
+        assert_eq!(world.notes(), before + 1);
+
+        // O diretório passa a existir: a próxima gravação funciona e limpa o erro.
+        std::fs::remove_file(&blocked).unwrap();
+        std::fs::create_dir(&blocked).unwrap();
+        engine.set_app_route("chrome.exe", Flow::Render, Some(dev_id("fone")));
+
+        assert_eq!(engine.state().save_error, None);
+        let on_disk: RuleSet = Store::open(blocked.clone()).load("rules");
+        assert_eq!(on_disk.rules, vec![rule("chrome.exe", Flow::Render, "fone")]);
     }
 }
