@@ -61,6 +61,7 @@ export function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
 }
 
+/** Rejeita com a frase do Rust (em português) quando o atalho ou o "Iniciar com o Windows" falham; nada é gravado nesse caso. */
 export function saveSettings(settings: Settings): Promise<void> {
   return invoke<void>("save_settings", { settings });
 }

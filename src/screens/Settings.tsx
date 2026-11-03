@@ -35,7 +35,8 @@ function enqueueSettings(call: () => Promise<void>, onFail: () => void) {
  * Configurações (mockup E). O estado vem do store (`state.settings`); `get_settings` só entra
  * como reserva se o estado não trouxer configurações. Mudança aparece na hora (sobreposição
  * local) e vai para `save_settings` em fila. Se um campo falha, só ele volta ao valor
- * confirmado. Iniciar com o Windows e o atalho só guardam a escolha: registrar é a Task 14.
+ * confirmado. Atalho e "Iniciar com o Windows" são aplicados pelo Rust ao gravar; se recusarem,
+ * a frase de motivo aparece no aviso.
  */
 export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProps) {
   const state = useAppState();
@@ -91,12 +92,17 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
         if (!current) return Promise.resolve();
         return api.saveSettings({ ...current, ...wanted.current });
       },
-      () => {
+      (error: unknown) => {
         const rest = { ...wanted.current };
         delete rest[field];
         wanted.current = rest;
         setOverlay(rest);
-        notify("Não foi possível salvar a configuração.");
+        // Atalho em uso ou "Iniciar com o Windows" recusado chegam como frase em português.
+        notify(
+          typeof error === "string" && error.length > 0
+            ? error
+            : "Não foi possível salvar a configuração.",
+        );
       },
     );
   }

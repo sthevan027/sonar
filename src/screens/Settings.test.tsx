@@ -135,6 +135,19 @@ describe("Settings", () => {
     expect(await screen.findByText("Não foi possível salvar a configuração.")).toBeTruthy();
   });
 
+  it("shows_the_reason_when_the_shortcut_is_refused", async () => {
+    setup();
+    vi.mocked(api.saveSettings).mockRejectedValueOnce(
+      "Não foi possível registrar o atalho Ctrl+K. Outro programa pode estar usando essa combinação.",
+    );
+    await screen.findByRole("switch", { name: "Iniciar com o Windows" });
+    const keys = screen.getByRole("button", { name: /Atalho global/ });
+    fireEvent.click(keys);
+    fireEvent.keyDown(keys, { key: "k", code: "KeyK", ctrlKey: true });
+    expect(await screen.findByText(/Outro programa pode estar usando/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Atalho global: Win Alt V. Toque para trocar." })).toBeTruthy();
+  });
+
   it("shortcut_helpers_map_keys_and_validate_combo", () => {
     expect(shortcutKeys("Super+Alt+V")).toEqual(["Win", "Alt", "V"]);
     const none = { altKey: false, shiftKey: false, metaKey: false, ctrlKey: false };
