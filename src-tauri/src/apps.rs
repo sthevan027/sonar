@@ -161,8 +161,8 @@ mod windows_impl {
     use std::mem::size_of;
     use std::path::Path;
 
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM};
+    use windows::core::{BOOL, PCWSTR};
+    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO,
