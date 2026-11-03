@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { ToastProvider } from "../components/Toast";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../api";
 import type { AppState, AudioSession, DeviceView } from "../types";
@@ -124,9 +126,13 @@ function makeState(overrides: Partial<AppState> = {}): AppState {
   };
 }
 
+function renderTab(node: ReactElement) {
+  return render(<ToastProvider>{node}</ToastProvider>);
+}
+
 describe("OutputTab", () => {
   it("output_tab_renders_default_output_apps_and_collapsed_silent_row", () => {
-    render(<OutputTab state={makeState()} />);
+    renderTab(<OutputTab state={makeState()} />);
 
     expect(screen.getByText("Caixa")).toBeTruthy();
     expect(screen.getByText("Spotify")).toBeTruthy();
@@ -148,30 +154,72 @@ describe("OutputTab", () => {
   });
 
   it("output_tab_routes_app_to_chosen_device", () => {
-    render(<OutputTab state={makeState()} />);
+    renderTab(<OutputTab state={makeState()} />);
     fireEvent.click(screen.getByRole("button", { name: "Headset" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Caixa" }));
     expect(api.setAppRoute).toHaveBeenCalledWith("spotify.exe", "render", "c");
   });
 
-  it("output_tab_volume_is_debounced_and_applies_to_every_pid", () => {
+  it("output_tab_volume_sends_first_move_now_and_final_value_after_window", () => {
     vi.useFakeTimers();
-    render(<OutputTab state={makeState()} />);
+    renderTab(<OutputTab state={makeState()} />);
     const slider = screen.getByRole("slider", { name: "Volume do Chrome" });
 
     fireEvent.change(slider, { target: { value: "40" } });
-    vi.advanceTimersByTime(30);
+    expect(api.setSessionVolume).toHaveBeenCalledTimes(2);
+    expect(api.setSessionVolume).toHaveBeenCalledWith(30, "render", 0.4);
+
     fireEvent.change(slider, { target: { value: "45" } });
-    expect(api.setSessionVolume).not.toHaveBeenCalled();
+    expect(api.setSessionVolume).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(60);
-    expect(api.setSessionVolume).toHaveBeenCalledTimes(2);
+    expect(api.setSessionVolume).toHaveBeenCalledTimes(4);
     expect(api.setSessionVolume).toHaveBeenCalledWith(30, "render", 0.45);
     expect(api.setSessionVolume).toHaveBeenCalledWith(31, "render", 0.45);
   });
 
+  it("output_tab_route_failure_shows_toast", async () => {
+    vi.mocked(api.setAppRoute).mockRejectedValueOnce(new Error("falhou"));
+    renderTab(<OutputTab state={makeState()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Headset" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Caixa" }));
+    expect(await screen.findByText("Não foi possível mudar a saída de Spotify.")).toBeTruthy();
+  });
+
+  it("output_tab_default_output_failure_shows_toast", async () => {
+    vi.mocked(api.setDefaultDevice).mockRejectedValueOnce(new Error("falhou"));
+    renderTab(<OutputTab state={makeState()} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Headset" }));
+    expect(await screen.findByText("Não foi possível trocar a saída padrão.")).toBeTruthy();
+    expect(api.setDefaultDevice).toHaveBeenCalledWith("h", "render");
+  });
+
+  it("output_tab_partial_pid_failure_is_silent", async () => {
+    // Um PID que já fechou falha; o outro aceita. Não é erro para o usuário.
+    vi.mocked(api.setSessionVolume)
+      .mockRejectedValueOnce(new Error("pid fechado"))
+      .mockResolvedValueOnce(undefined);
+    renderTab(<OutputTab state={makeState()} />);
+    await act(async () => {
+      fireEvent.change(screen.getByRole("slider", { name: "Volume do Chrome" }), { target: { value: "40" } });
+    });
+    expect(api.setSessionVolume).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status").querySelectorAll(".toast")).toHaveLength(0);
+  });
+
+  it("output_tab_all_pids_failing_shows_one_volume_toast", async () => {
+    vi.mocked(api.setSessionVolume)
+      .mockRejectedValueOnce(new Error("a"))
+      .mockRejectedValueOnce(new Error("b"));
+    renderTab(<OutputTab state={makeState()} />);
+    await act(async () => {
+      fireEvent.change(screen.getByRole("slider", { name: "Volume do Chrome" }), { target: { value: "40" } });
+    });
+    expect(await screen.findByText("Não foi possível mudar o volume.")).toBeTruthy();
+  });
+
   it("output_tab_empty_states_without_apps_or_devices", () => {
-    render(<OutputTab state={makeState({ sessions: [], devices: [] })} />);
+    renderTab(<OutputTab state={makeState({ sessions: [], devices: [] })} />);
     expect(screen.getByText(/Nenhum app com som agora/)).toBeTruthy();
     expect(screen.getByText("Nenhuma saída conectada")).toBeTruthy();
   });

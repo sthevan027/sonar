@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Icon } from "../components/Icon";
 import { Tabs } from "../components/Tabs";
+import type { PanelTab } from "../routes";
 import { useAppState } from "../store";
-import type { Route } from "../routes";
 import { MicTab } from "./MicTab";
 import { OutputTab } from "./OutputTab";
 import { ProfileBar } from "./ProfileBar";
@@ -10,14 +10,14 @@ import { ProfileBar } from "./ProfileBar";
 interface PanelProps {
   /** Botão "+" da barra de perfis. Ligado ao editor na Task 12. */
   onAddProfile: () => void;
-  /** Troca de tela (App). Nenhum botão do painel usa ainda; a Task 12 liga o editor por aqui. */
-  onNavigate: (route: Route) => void;
+  /** Aba escolhida. Vem da rota, para sobreviver a uma troca de tela. */
+  tab: PanelTab;
+  onTabChange: (tab: PanelTab) => void;
 }
 
 /** Painel principal (mockups A e A2): perfis, avisos, abas Saída | Microfone. */
-export function Panel({ onAddProfile }: PanelProps) {
+export function Panel({ onAddProfile, tab, onTabChange }: PanelProps) {
   const state = useAppState();
-  const [tab, setTab] = useState<"output" | "mic">("output");
 
   return (
     <>
@@ -46,7 +46,7 @@ export function Panel({ onAddProfile }: PanelProps) {
           { id: "mic", label: "Microfone", icon: <Icon name="mic" size={17} /> },
         ]}
         active={tab}
-        onChange={(id) => setTab(id === "mic" ? "mic" : "output")}
+        onChange={(id) => onTabChange(id === "mic" ? "mic" : "output")}
       />
 
       {tab === "output" ? <OutputTab state={state} /> : <MicTab state={state} />}

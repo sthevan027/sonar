@@ -102,7 +102,21 @@ export function iconNameOf(device: DeviceView | undefined): IconName | undefined
   return device && isIconName(device.icon) ? device.icon : undefined;
 }
 
-/** Dispara uma chamada de comando sem deixar a falha virar erro não tratado. O estado real volta pelo `state-changed`. */
-export function quiet(call: Promise<void>): void {
-  void Promise.resolve(call).catch(() => undefined);
+/** Roda um comando e chama `onFail` se ele falhar. O estado real volta pelo `state-changed`. */
+export function attempt(call: Promise<unknown>, onFail: () => void): void {
+  Promise.resolve(call).then(undefined, onFail);
+}
+
+/**
+ * Dispositivos que o menu oferece para um fluxo: conectados e não ocultos, mais o dispositivo
+ * da rota atual mesmo se estiver oculto (senão o chip mostraria um item que não está no menu).
+ */
+export function selectableDevices(
+  devices: DeviceView[],
+  flow: Flow,
+  selectedId: string | null,
+): DeviceView[] {
+  return devices.filter(
+    (d) => d.flow === flow && d.connected && (!d.hidden || d.id === selectedId),
+  );
 }

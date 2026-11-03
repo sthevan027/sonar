@@ -4,14 +4,16 @@ import { AppLogo } from "../components/AppLogo";
 import { Card } from "../components/Card";
 import { DeviceMenu } from "../components/DeviceMenu";
 import { Icon } from "../components/Icon";
+import { useToast } from "../components/Toast";
 import { VolumeSlider } from "../components/VolumeSlider";
 import type { AppState } from "../types";
 import {
   appName,
+  attempt,
   groupSessions,
   iconNameOf,
-  quiet,
   routeFor,
+  selectableDevices,
   toneOf,
 } from "./model";
 
@@ -33,10 +35,10 @@ export function litSegments(db: number): number {
 /** Aba Microfone (mockup A2): mic padrão com medidor, volume e silenciar; apps usando o mic. */
 export function MicTab({ state }: { state: AppState }) {
   const mic = state.devices.find((d) => d.flow === "capture" && d.is_default);
-  const inputs = state.devices.filter((d) => d.flow === "capture" && d.connected && !d.hidden);
   const { active } = groupSessions(state.sessions, "capture");
   const micId = mic?.id ?? null;
   const [peak, setPeak] = useState(0);
+  const notify = useToast();
 
   // Medidor: assina `mic-level` só enquanto esta aba está na tela; cancela ao sair.
   useEffect(() => {
@@ -101,7 +103,11 @@ export function MicTab({ state }: { state: AppState }) {
             <button
               type="button"
               className={mic.muted ? "mute off" : "mute"}
-              onClick={() => quiet(api.setDeviceMuted(mic.id, !mic.muted))}
+              onClick={() =>
+                attempt(api.setDeviceMuted(mic.id, !mic.muted), () =>
+                  notify("Não foi possível silenciar o microfone."),
+                )
+              }
             >
               <Icon name="mic" size={18} />
               {mic.muted
@@ -142,9 +148,13 @@ export function MicTab({ state }: { state: AppState }) {
                   label={route.label}
                   icon={chipIcon ? <Icon name={chipIcon} size={15} /> : undefined}
                   menuLabel={`Microfone de ${name}`}
-                  devices={inputs}
+                  devices={selectableDevices(state.devices, "capture", route.selectedId)}
                   selectedId={route.selectedId}
-                  onSelect={(id) => quiet(api.setAppRoute(row.exe, "capture", id))}
+                  onSelect={(id) =>
+                    attempt(api.setAppRoute(row.exe, "capture", id), () =>
+                      notify(`Não foi possível mudar o microfone de ${name}.`),
+                    )
+                  }
                 />
               </div>
             </Card>

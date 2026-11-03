@@ -39,6 +39,7 @@ button:focus-visible {
 
 /* Janela do painel: 388x668 dentro da janela transparente de 420x700. */
 .win {
+  position: relative;
   width: 388px;
   height: 668px;
   background: var(--panel);
@@ -685,4 +686,33 @@ button:focus-visible {
 
 .dmenu-item.on {
   color: var(--brass);
+}
+
+/* Avisos curtos (toast): quadro sobre a parte de baixo do painel, sem tomar cliques. */
+.toasts {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.toast {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--danger-line);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Menu que abre para cima quando não cabe embaixo do chip. */
+.dmenu-list.up {
+  top: auto;
+  bottom: calc(100% + 6px);
 }

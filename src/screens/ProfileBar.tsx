@@ -1,9 +1,10 @@
 import * as api from "../api";
 import { IconButton } from "../components/IconButton";
+import { useToast } from "../components/Toast";
 import { Icon } from "../components/Icon";
 import { isIconName } from "../icons";
 import type { Profile } from "../types";
-import { quiet } from "./model";
+import { attempt } from "./model";
 
 interface ProfileBarProps {
   profiles: Profile[];
@@ -15,6 +16,7 @@ interface ProfileBarProps {
 
 /** Linha de perfis no topo do painel (mockup A). Ativar um perfil é um clique. */
 export function ProfileBar({ profiles, lastProfile, onAdd }: ProfileBarProps) {
+  const notify = useToast();
   const current = profiles.find((p) => p.id === lastProfile);
 
   return (
@@ -26,7 +28,12 @@ export function ProfileBar({ profiles, lastProfile, onAdd }: ProfileBarProps) {
           icon={<Icon name={isIconName(profile.icon) ? profile.icon : "layers"} size={20} />}
           size={44}
           selected={profile.id === lastProfile}
-          onPress={() => quiet(api.activateProfile(profile.id))}
+          onPress={() =>
+            // Perfil que não existe mais volta como erro do Rust: aparece como aviso.
+            attempt(api.activateProfile(profile.id), () =>
+              notify(`Não foi possível ativar o perfil ${profileName(profile)}.`),
+            )
+          }
         />
       ))}
       <span className="pslot add">

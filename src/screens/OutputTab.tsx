@@ -4,14 +4,16 @@ import { AppLogo } from "../components/AppLogo";
 import { Card } from "../components/Card";
 import { DeviceMenu } from "../components/DeviceMenu";
 import { Icon } from "../components/Icon";
+import { useToast } from "../components/Toast";
 import { VolumeSlider } from "../components/VolumeSlider";
-import type { AppState, DeviceView } from "../types";
+import type { AppState } from "../types";
 import {
   appName,
+  attempt,
   groupSessions,
   iconNameOf,
-  quiet,
   routeFor,
+  selectableDevices,
   toneOf,
   type AppRow,
 } from "./model";
@@ -22,6 +24,7 @@ export { groupSessions, type AppRow } from "./model";
 /** Aba Saída (mockup A): saída padrão, apps com som e a linha recolhida "Em silêncio". */
 export function OutputTab({ state }: { state: AppState }) {
   const [silentOpen, setSilentOpen] = useState(false);
+  const notify = useToast();
   const outputs = state.devices.filter((d) => d.flow === "render" && d.connected && !d.hidden);
   const defaultDevice = state.devices.find((d) => d.flow === "render" && d.is_default);
   const { active, silent } = groupSessions(state.sessions, "render");
@@ -50,7 +53,11 @@ export function OutputTab({ state }: { state: AppState }) {
                   aria-label={device.display_name}
                   title={device.display_name}
                   className={device.is_default ? "tab tab-icon on" : "tab tab-icon"}
-                  onClick={() => quiet(api.setDefaultDevice(device.id, "render"))}
+                  onClick={() =>
+                    attempt(api.setDefaultDevice(device.id, "render"), () =>
+                      notify("Não foi possível trocar a saída padrão."),
+                    )
+                  }
                 >
                   <Icon name={iconNameOf(device) ?? "speaker"} size={18} />
                 </button>
@@ -86,7 +93,7 @@ export function OutputTab({ state }: { state: AppState }) {
           <p className="empty">Nenhum app tocando agora.</p>
         )}
         {active.map((row) => (
-          <AppCard key={row.key} row={row} state={state} outputs={outputs} />
+          <AppCard key={row.key} row={row} state={state} />
         ))}
 
         {silent.length > 0 && (
@@ -102,9 +109,7 @@ export function OutputTab({ state }: { state: AppState }) {
               <span className="cnt">{silent.length}</span>
             </button>
             {silentOpen &&
-              silent.map((row) => (
-                <AppCard key={row.key} row={row} state={state} outputs={outputs} />
-              ))}
+              silent.map((row) => <AppCard key={row.key} row={row} state={state} />)}
           </>
         )}
       </div>
@@ -122,15 +127,8 @@ export function OutputTab({ state }: { state: AppState }) {
   );
 }
 
-function AppCard({
-  row,
-  state,
-  outputs,
-}: {
-  row: AppRow;
-  state: AppState;
-  outputs: DeviceView[];
-}) {
+function AppCard({ row, state }: { row: AppRow; state: AppState }) {
+  const notify = useToast();
   const name = appName(row.exe);
   const route = routeFor(state, row.exe, "render");
   const routed = state.devices.find((d) => d.id === route.selectedId);
@@ -151,20 +149,28 @@ function AppCard({
           label={route.label}
           icon={chipIcon ? <Icon name={chipIcon} size={15} /> : undefined}
           menuLabel={`Saída de ${name}`}
-          devices={outputs}
+          devices={selectableDevices(state.devices, "render", route.selectedId)}
           selectedId={route.selectedId}
-          onSelect={(id) => quiet(api.setAppRoute(row.exe, "render", id))}
+          onSelect={(id) =>
+            attempt(api.setAppRoute(row.exe, "render", id), () =>
+              notify(`Não foi possível mudar a saída de ${name}.`),
+            )
+          }
         />
       </div>
       <VolumeSlider
         label={`Volume do ${name}`}
         icon={<Icon name="volume-2" size={18} />}
         value={row.volume}
-        onCommit={(value) =>
-          Promise.all(row.pids.map((pid) => api.setSessionVolume(pid, "render", value))).then(
-            () => undefined,
-          )
-        }
+        onCommit={async (value) => {
+          // Um PID que já fechou falha sem motivo: só é erro se todos falharem.
+          const results = await Promise.allSettled(
+            row.pids.map((pid) => api.setSessionVolume(pid, "render", value)),
+          );
+          if (results.length > 0 && results.every((r) => r.status === "rejected")) {
+            throw new Error("volume do app");
+          }
+        }}
       />
     </Card>
   );

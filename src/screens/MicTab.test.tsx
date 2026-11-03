@@ -51,13 +51,27 @@ function makeState(): AppState {
 describe("MicTab", () => {
   it("mic_tab_unsubscribes_mic_level_on_unmount", async () => {
     const unlisten = vi.fn();
-    vi.mocked(api.onMicLevel).mockResolvedValue(unlisten);
+    // A assinatura só termina quando a promessa de `listen` resolve: esperamos ela antes de desmontar.
+    let finishListen!: (stop: () => void) => void;
+    vi.mocked(api.onMicLevel).mockReturnValue(new Promise((resolve) => (finishListen = resolve)));
 
     const { unmount } = render(<MicTab state={makeState()} />);
     await waitFor(() => expect(api.onMicLevel).toHaveBeenCalledTimes(1));
+    await act(async () => finishListen(unlisten));
     expect(unlisten).not.toHaveBeenCalled();
 
     unmount();
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("mic_tab_unlistens_when_unmounted_before_listen_resolves", async () => {
+    const unlisten = vi.fn();
+    let finishListen!: (stop: () => void) => void;
+    vi.mocked(api.onMicLevel).mockReturnValue(new Promise((resolve) => (finishListen = resolve)));
+
+    const { unmount } = render(<MicTab state={makeState()} />);
+    unmount();
+    await act(async () => finishListen(unlisten));
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
