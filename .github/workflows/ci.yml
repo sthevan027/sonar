@@ -9,7 +9,8 @@ permissions:
 jobs:
   web:
     name: Testes e build da interface
-    runs-on: ubuntu-latest
+    # Windows, como no desenvolvimento: o app é só Windows e a suíte foi rodada nele.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
