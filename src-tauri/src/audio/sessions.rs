@@ -45,13 +45,21 @@ pub fn keep_real_sessions(sessions: Vec<AudioSession>) -> Vec<AudioSession> {
 /// Nome do executável de um processo, normalizado. `UNKNOWN_EXE` quando não dá para ler.
 #[cfg(windows)]
 pub(super) fn process_exe(pid: u32) -> String {
+    match process_image_path(pid) {
+        Some(path) => normalize_exe(&path),
+        None => UNKNOWN_EXE.to_string(),
+    }
+}
+
+/// Caminho completo do executável de um processo. `None` quando o Windows não deixa ler
+/// (processo protegido, já encerrado, pid 0).
+#[cfg(windows)]
+pub(crate) fn process_image_path(pid: u32) -> Option<String> {
     if pid == 0 {
-        return UNKNOWN_EXE.to_string();
+        return None;
     }
     // SAFETY: OpenProcess só devolve um handle; ele é fechado logo abaixo.
-    let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
-        return UNKNOWN_EXE.to_string();
-    };
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
     // Caminhos longos (até 32767 caracteres) cabem no buffer; o Windows devolve o tamanho usado.
     let mut buf = vec![0u16; 32768];
     let mut len = buf.len() as u32;
@@ -63,9 +71,9 @@ pub(super) fn process_exe(pid: u32) -> String {
     // SAFETY: handle obtido de OpenProcess acima, fechado uma vez.
     let _ = unsafe { CloseHandle(handle) };
     if !ok {
-        return UNKNOWN_EXE.to_string();
+        return None;
     }
-    normalize_exe(&String::from_utf16_lossy(&buf[..len as usize]))
+    Some(String::from_utf16_lossy(&buf[..len as usize]))
 }
 
 /// Sessões de um dispositivo (saída ou entrada) via `IAudioSessionManager2`.

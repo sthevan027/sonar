@@ -10,6 +10,7 @@ mod profiles;
 mod state;
 mod engine;
 mod commands;
+mod apps;
 
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
@@ -43,6 +44,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             shell::show_panel(app);
         }))
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             shell::setup(app)?;
             start_engine(app)?;
@@ -62,6 +64,9 @@ pub fn run() {
             commands::activate_profile,
             commands::get_settings,
             commands::save_settings,
+            commands::list_running_apps,
+            commands::app_icon,
+            commands::set_blur_hide_suspended,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar o Sonar");

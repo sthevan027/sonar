@@ -1,9 +1,11 @@
 //! Comandos do Tauri: camada fina sobre o `Engine`. Quem tem erro devolve `String` com
 //! uma frase curta em português. Os nomes são os que a interface chama (`src/api.ts`).
 
+use crate::apps::{self, RunningApp};
 use crate::audio::types::{AudioError, DeviceId, Flow};
 use crate::engine::Engine;
 use crate::profiles::{NameError, Profile};
+use crate::shell;
 use crate::state::{AppState, Settings};
 use serde::Serialize;
 use std::sync::Arc;
@@ -128,6 +130,36 @@ pub fn activate_profile(engine: Eng<'_>, id: String) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn get_settings(engine: Eng<'_>) -> Settings {
     engine.settings()
+}
+
+/// Apps com janela aberta, para o seletor do editor de perfil.
+#[tauri::command(async)]
+pub fn list_running_apps() -> Vec<RunningApp> {
+    contained("lista de apps", apps::list_running_apps)
+}
+
+/// Ícone do app como data URL PNG; `null` quando não há (o app não está aberto, por exemplo).
+#[tauri::command(async)]
+pub fn app_icon(exe: String) -> Option<String> {
+    contained("ícone do app", || apps::app_icon(&exe))
+}
+
+/// Liga/desliga o esconder-ao-perder-foco do painel (true enquanto o diálogo de arquivo abre).
+#[tauri::command(async)]
+pub fn set_blur_hide_suspended(suspended: bool) {
+    shell::set_blur_hide_suspended(suspended);
+}
+
+/// Roda `f` segurando pânico: um erro nos ícones ou na lista não derruba o app. Devolve o
+/// padrão do tipo quando ocorre pânico (em build de release `panic = "unwind"` faz isso valer).
+fn contained<T: Default>(label: &str, f: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(_) => {
+            eprintln!("sonar: {label} falhou com pânico; seguindo");
+            T::default()
+        }
+    }
 }
 
 #[tauri::command(async)]

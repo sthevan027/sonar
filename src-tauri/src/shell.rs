@@ -1,5 +1,6 @@
 //! Bandeja do sistema e janela do painel.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,14 @@ const BLUR_GRACE: Duration = Duration::from_millis(250);
 /// Quando o painel foi escondido por perda de foco pela última vez.
 type HiddenAt = Arc<Mutex<Option<Instant>>>;
 
+/// Enquanto o diálogo "Procurar .exe" está aberto, o painel perde o foco para ele e não deve
+/// se esconder. A interface liga e desliga pelo comando `set_blur_hide_suspended`.
+static BLUR_HIDE_SUSPENDED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_blur_hide_suspended(suspended: bool) {
+    BLUR_HIDE_SUSPENDED.store(suspended, Ordering::SeqCst);
+}
+
 pub fn setup(app: &mut App) -> tauri::Result<()> {
     let panel = app
         .get_webview_window(PANEL)
@@ -32,7 +41,9 @@ pub fn setup(app: &mut App) -> tauri::Result<()> {
         let hidden_at = hidden_at.clone();
         panel.on_window_event(move |event| match event {
             WindowEvent::Focused(false) => {
-                if window.is_visible().unwrap_or(false) {
+                if !BLUR_HIDE_SUSPENDED.load(Ordering::SeqCst)
+                    && window.is_visible().unwrap_or(false)
+                {
                     let _ = window.hide();
                     *lock(&hidden_at) = Some(Instant::now());
                 }
