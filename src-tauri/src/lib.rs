@@ -1,4 +1,6 @@
 mod shell;
+#[allow(dead_code)] // Task 9 consome o Store; até lá só os testes o usam.
+mod store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
