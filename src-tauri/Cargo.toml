@@ -46,5 +46,6 @@ tempfile = "3"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# Precisa ser "unwind": as guardas catch_unwind das threads em lib.rs dependem disso.
+panic = "unwind"
 strip = true
