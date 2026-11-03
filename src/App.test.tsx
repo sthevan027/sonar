@@ -54,4 +54,15 @@ describe("App", () => {
     expect(await screen.findByText("Caixa")).toBeTruthy();
     expect(screen.getByText("Saída padrão")).toBeTruthy();
   });
+
+  it("cancelar no editor volta para a aba de onde ele abriu", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Microfone" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Novo perfil" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancelar" }));
+
+    const mic = await screen.findByRole("tab", { name: "Microfone" });
+    expect(mic.getAttribute("aria-selected")).toBe("true");
+  });
 });

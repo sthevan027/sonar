@@ -170,6 +170,46 @@ describe("ProfileEditor", () => {
     expect(rows[1].querySelectorAll('[data-kind="mic"]')).toHaveLength(1);
   });
 
+  it("create_path_adds_apps_routes_output_and_mic_and_saves", async () => {
+    fx.state = stateWith({ profiles: [] });
+    vi.mocked(api.listRunningApps)
+      .mockResolvedValueOnce(apps)
+      .mockResolvedValueOnce(apps);
+    const onDone = vi.fn();
+    const { container } = render(<ProfileEditor onDone={onDone} />);
+
+    // Spotify: só saída. Sem sessão de mic, o chip de mic não aparece.
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar app" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Spotify" }));
+    const chips = () =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]'));
+    expect(chips()).toHaveLength(1);
+    fireEvent.click(chips()[0]);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Caixa" }));
+
+    // Discord: tem sessão de captura, então ganha o chip de mic.
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar app" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discord" }));
+    expect(container.querySelectorAll('[data-kind="mic"]')).toHaveLength(1);
+    fireEvent.click(chips()[1]);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Headset" }));
+    fireEvent.click(chips()[2]);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Mic do headset" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Salvar perfil" }));
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+
+    const saved = JSON.parse(JSON.stringify(vi.mocked(api.saveProfile).mock.calls[0][0]));
+    expect(saved).toEqual({
+      id: expect.any(String),
+      icon: "gamepad-2",
+      items: [
+        { exe: "spotify.exe", output: "out-caixa" },
+        { exe: "discord.exe", output: "out-headset", input: "in-headset" },
+      ],
+    });
+  });
+
   it("delete_needs_inline_confirmation_before_calling_api", () => {
     render(<ProfileEditor profileId="jogo" onDone={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Excluir perfil" }));
