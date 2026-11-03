@@ -1,0 +1,32 @@
+{
+  "name": "sonar",
+  "private": true,
+  "version": "0.1.0",
+  "description": "App de bandeja para controlar o áudio por app no Windows",
+  "license": "MIT",
+  "author": "Sthevan Santos",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fontsource/bricolage-grotesque": "^5.3.0",
+    "@fontsource/dm-sans": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.2.1",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
+  }
+}

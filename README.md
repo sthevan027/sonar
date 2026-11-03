@@ -4,11 +4,23 @@
 
 App de bandeja para Windows 10/11 (Tauri: Rust + React/TS) que controla o áudio melhor que o mixer do Windows: **cada app numa saída diferente** (ex.: Spotify na caixa, Discord e Chrome no headset), perfis com ícone e regras que o app lembra sozinho.
 
-Estado: **fase de estudo**. Existe só um spike descartável em Rust (`src/main.rs`) que provou que o roteamento por app funciona. Decisões e pendências em [`docs/DECISOES.md`](docs/DECISOES.md).
+Estado: **esqueleto do app** (bandeja + painel vazio, em `src-tauri/` e `src/`). O spike descartável em Rust, que provou que o roteamento por app funciona, foi movido para `spike/`. Decisões e pendências em [`docs/DECISOES.md`](docs/DECISOES.md).
 
-## Spike (descartável)
+## Desenvolvimento do app
+
+Precisa de [Bun](https://bun.sh), Rust (toolchain estável) e do Windows 10/11 (WebView2 já vem instalado).
 
 ```
+bun install
+bun run tauri dev     # abre o app na bandeja (frontend na porta 1420)
+bun run test          # Vitest (teste de fumaça do painel)
+bun run build         # tsc + build do Vite
+```
+
+## Spike (descartável, em `spike/`)
+
+```
+cd spike
 cargo run -- list                    # dispositivos de saída + apps com áudio
 cargo run -- get <pid>               # rota gravada para o app
 cargo run -- route <pid> <idx>       # manda o app para o dispositivo #idx

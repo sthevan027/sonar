@@ -1,0 +1,27 @@
+/* Tokens do Sonar: "estúdio à noite". Valores de docs/mockups/A.html. */
+:root {
+  --bg: #0F0E0D;
+  --panel: #1B1A18;
+  --card: #25231F;
+  --line: #37332B;
+  --text: #EDE6D6;
+  --mute: #9A917F;
+  --brass: #D9A441;
+  --sage: #86A9B8;
+  --live: #8FBF7A;
+
+  --font-display: "Bricolage Grotesque", sans-serif;
+  --font-text: "DM Sans", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+/* A janela é transparente: o painel desenha o próprio fundo e os cantos. */
+html,
+body,
+#root {
+  margin: 0;
+  width: 420px;
+  height: 700px;
+  overflow: hidden;
+  background: transparent;
+}
