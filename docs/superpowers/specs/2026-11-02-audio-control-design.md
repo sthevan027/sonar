@@ -1,6 +1,6 @@
-# audio-control — design (v1)
+# Sonar — design (v1)
 
-> Nome **provisório**. Decisões do Sthevan estão marcadas como **[decidido]**; escolhas minhas estão marcadas como **[minha escolha]** para ele conferir. Contexto e histórico em `docs/DECISOES.md`.
+> Nome do produto: **Sonar** **[decidido, 2026-11-02]**. O repositório ainda se chama `audio-control` (renomear está pendente). Ícone em estudo (3 versões no Doop, https://doop.design/c/QGNSVqwX0n; recomendação: V3 "S de rota"). Decisões do Sthevan estão marcadas como **[decidido]**; escolhas minhas estão marcadas como **[minha escolha]** para ele conferir. Contexto e histórico em `docs/DECISOES.md`.
 
 ## 1. Intenção e por quê
 
@@ -113,5 +113,5 @@ Estrutura de pastas do repositório (o spike hoje está na raiz: mover para `spi
 
 ## 10. Em aberto (só o Sthevan decide)
 
-- **Nome** do produto.
+- ~~Nome do produto~~ → **Sonar** (decidido). Falta checar conflito de marca/nome e escolher o ícone.
 - **Licença**: código aberto ou fechado.

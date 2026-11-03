@@ -4,6 +4,8 @@ Origem: o mixer de volume do Windows 10/11 exige muitos cliques e não permite d
 
 ## Decidido pelo Sthevan
 
+- **Nome do produto: Sonar** (2026-11-02). Ícone: 3 versões no Doop (https://doop.design/c/QGNSVqwX0n) — V1 anéis de ping, V2 radar, V3 "S de rota". Teste de tamanho (128/48/32/16): só o V3 segue legível a 16 px; recomendado. O ícone da bandeja pode ser uma versão monocromática simplificada à parte.
+
 - **Objetivo:** ferramenta pessoal **e** produto. Gratuito. Open source ou código fechado: **ainda não decidiu** (não bloqueia a v1).
 - **Stack:** Tauri (Rust + React/TypeScript), mesma do Focus Brew. É um app **separado** do Focus Brew; só reaproveita o padrão de bandeja/popup/atalho global.
 - **Design:** próprio, não seguir a linha do EarTrumpet ("estressante"). Nunca usou apps parecidos.

@@ -1,4 +1,4 @@
-# audio-control (nome provisório)
+# Sonar (repositório ainda como `audio-control`)
 
 App de bandeja para Windows 10/11 (Tauri: Rust + React/TS) que controla o áudio melhor que o mixer do Windows: **cada app numa saída diferente** (ex.: Spotify na caixa, Discord e Chrome no headset), perfis com ícone e regras que o app lembra sozinho.
 
