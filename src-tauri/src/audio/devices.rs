@@ -52,7 +52,7 @@ pub(super) fn to_audio_error(e: windows::core::Error) -> AudioError {
 }
 
 #[cfg(windows)]
-fn edata_flow(flow: Flow) -> EDataFlow {
+pub(super) fn edata_flow(flow: Flow) -> EDataFlow {
     match flow {
         Flow::Render => eRender,
         Flow::Capture => eCapture,
@@ -61,14 +61,14 @@ fn edata_flow(flow: Flow) -> EDataFlow {
 
 /// Cria o `IMMDeviceEnumerator` do thread chamador. O chamador já inicializou o COM.
 #[cfg(windows)]
-fn create_enumerator() -> Result<IMMDeviceEnumerator, AudioError> {
+pub(super) fn create_enumerator() -> Result<IMMDeviceEnumerator, AudioError> {
     // SAFETY: criação de objeto COM padrão do sistema; sem agregação.
     unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }.map_err(to_audio_error)
 }
 
 /// Id puro do endpoint (`GetId`). Libera a memória que o Windows alocou para a string.
 #[cfg(windows)]
-fn device_id(device: &IMMDevice) -> Result<DeviceId, AudioError> {
+pub(super) fn device_id(device: &IMMDevice) -> Result<DeviceId, AudioError> {
     // SAFETY: GetId devolve uma string alocada com CoTaskMemAlloc, liberada logo abaixo.
     let pwstr = unsafe { device.GetId() }.map_err(to_audio_error)?;
     // SAFETY: ponteiro válido devolvido por GetId, lido antes de ser liberado.
@@ -100,7 +100,7 @@ fn default_id(enumerator: &IMMDeviceEnumerator, flow: Flow) -> Option<DeviceId> 
 
 /// Endpoints ativos (conectados) de um fluxo, com o id já lido.
 #[cfg(windows)]
-fn active_endpoints(
+pub(super) fn active_endpoints(
     enumerator: &IMMDeviceEnumerator,
     flow: Flow,
 ) -> Result<Vec<(IMMDevice, DeviceId)>, AudioError> {

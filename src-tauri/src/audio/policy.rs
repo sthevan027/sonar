@@ -142,7 +142,7 @@ fn hstring_from(s: &str) -> Result<HSTRING, AudioError> {
 /// `obj` precisa apontar para um objeto COM válido e `index` precisa existir na vtable
 /// e ter a assinatura `F`.
 #[cfg(windows)]
-unsafe fn vtable_fn<F: Copy>(obj: *mut c_void, index: usize) -> F {
+pub(super) unsafe fn vtable_fn<F: Copy>(obj: *mut c_void, index: usize) -> F {
     let vtbl = *(obj as *const *const usize);
     let entry = *vtbl.add(index);
     std::mem::transmute_copy::<usize, F>(&entry)
