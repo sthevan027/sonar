@@ -103,7 +103,9 @@ Para publicar sem tag, use **Actions > Release > Run workflow**. Ele usa a vers�
 Não dá para testar tudo sem publicar. Roteiro:
 
 1. Instale uma versão **que já tenha o updater** (a primeira versão com essa funcionalidade precisa
-   ser instalada à mão; versões anteriores não sabem atualizar).
+   ser instalada à mão; versões anteriores não sabem atualizar). Instale o `Sonar_X.Y.Z_x64-setup.exe`
+   (NSIS, por usuário, sem UAC), não o `.msi`: o updater escolhe o mesmo tipo de instalador que estiver
+   instalado, então quem instalou o `.msi` continua recebendo `.msi`.
 2. Suba a versão seguinte (ex.: `0.2.0` depois de `0.1.0`) e espere o workflow terminar.
 3. No app instalado: **Configurações > Atualizações > Verificar atualizações**. Deve aparecer
    "Versão 0.2.0 disponível". Apertar **Atualizar e reiniciar** baixa, verifica a assinatura e roda
