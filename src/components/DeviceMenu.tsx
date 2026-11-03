@@ -22,10 +22,18 @@ interface DeviceMenuProps {
   menuLabel: string;
   /** Dispositivos oferecidos (quem chama já filtra com `selectableDevices`). */
   devices: DeviceView[];
-  /** Id do dispositivo marcado; `null` = Padrão do Windows. */
+  /** Id do dispositivo marcado; `null` = Padrão do Windows; `"keep"` = a linha de manter (ver `keepLabel`). */
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  /**
+   * Com texto, o menu ganha uma primeira linha "manter a rota atual" (id `"keep"`). Usado
+   * pelo editor de perfil, onde um item sem destino não mexe na rota.
+   */
+  keepLabel?: string;
 }
+
+/** Id da linha "manter a rota atual" (ver `keepLabel`). Não colide com id de dispositivo. */
+export const KEEP_ID = "keep";
 
 interface Choice {
   id: string | null;
@@ -66,6 +74,7 @@ export function DeviceMenu({
   devices,
   selectedId,
   onSelect,
+  keepLabel,
 }: DeviceMenuProps) {
   const [open, setOpen] = useState(false);
   const [side, setSide] = useState<"down" | "up">("down");
@@ -80,6 +89,7 @@ export function DeviceMenu({
   const pointerInMenu = useRef(false);
 
   const choices: Choice[] = [
+    ...(keepLabel !== undefined ? [{ id: KEEP_ID, label: keepLabel }] : []),
     { id: null, label: "Padrão do Windows" },
     ...devices.map((d) => ({
       id: d.id,

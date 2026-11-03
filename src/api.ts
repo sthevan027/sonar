@@ -3,7 +3,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppState, Flow, MicLevel, Profile, Settings } from "./types";
+import { open } from "@tauri-apps/plugin-dialog";
+import type { AppState, Flow, MicLevel, Profile, RunningApp, Settings } from "./types";
 
 export function getState(): Promise<AppState> {
   return invoke<AppState>("get_state");
@@ -74,7 +75,47 @@ export function onMicLevel(callback: (level: MicLevel) => void): Promise<Unliste
   return listen<MicLevel>("mic-level", (event) => callback(event.payload));
 }
 
-/** Stub até a Task 12: ainda não há ícone de app; devolve `null`. */
-export async function appIcon(_exe: string): Promise<string | null> {
-  return null;
+/** Apps com janela visível, um por executável. */
+export function listRunningApps(): Promise<RunningApp[]> {
+  return invoke<RunningApp[]>("list_running_apps");
+}
+
+/**
+ * Ícone do app como data URL PNG, ou `null` quando não há. Cache em memória por exe:
+ * resultado `null` não fica guardado (um app aberto depois ganha o ícone numa nova tentativa).
+ */
+const iconCache = new Map<string, Promise<string | null>>();
+
+export function appIcon(exe: string): Promise<string | null> {
+  const key = exe.trim().toLowerCase();
+  if (!key) return Promise.resolve(null);
+  let pending = iconCache.get(key);
+  if (!pending) {
+    pending = invoke<string | null>("app_icon", { exe: key }).catch(() => null);
+    iconCache.set(key, pending);
+    void pending.then((icon) => {
+      if (icon === null) iconCache.delete(key);
+    });
+  }
+  return pending;
+}
+
+/** Enquanto o diálogo de arquivo está aberto, o painel não se esconde por perda de foco. */
+export function setBlurHideSuspended(suspended: boolean): Promise<void> {
+  return invoke<void>("set_blur_hide_suspended", { suspended });
+}
+
+/** Diálogo "Procurar .exe". Devolve o caminho escolhido, ou `null` se cancelou. */
+export async function pickExecutable(): Promise<string | null> {
+  await setBlurHideSuspended(true);
+  try {
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Programas", extensions: ["exe"] }],
+    });
+    return typeof picked === "string" ? picked : null;
+  } finally {
+    await setBlurHideSuspended(false);
+  }
 }

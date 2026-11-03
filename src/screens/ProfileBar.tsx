@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import * as api from "../api";
 import { IconButton } from "../components/IconButton";
 import { useToast } from "../components/Toast";
@@ -6,35 +7,82 @@ import { isIconName } from "../icons";
 import type { Profile } from "../types";
 import { attempt } from "./model";
 
+/** Quanto tempo o botão precisa ficar pressionado para abrir a edição do perfil. */
+export const LONG_PRESS_MS = 600;
+
 interface ProfileBarProps {
   profiles: Profile[];
   /** Último perfil ativado nesta execução (o que aparece marcado). */
   lastProfile: string | null;
-  /** Botão "+": placeholder até a Task 12 ligar o editor de perfil. */
+  /** Botão "+": abre o editor de perfil novo. */
   onAdd: () => void;
+  /** Abre o editor de um perfil: toque longo, clique direito, ou o lápis do perfil ativo. */
+  onEdit: (profileId: string) => void;
 }
 
 /** Linha de perfis no topo do painel (mockup A). Ativar um perfil é um clique. */
-export function ProfileBar({ profiles, lastProfile, onAdd }: ProfileBarProps) {
+export function ProfileBar({ profiles, lastProfile, onAdd, onEdit }: ProfileBarProps) {
   const notify = useToast();
   const current = profiles.find((p) => p.id === lastProfile);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Depois de um toque longo, o clique que chega em seguida não deve ativar o perfil.
+  const skipClick = useRef(false);
+
+  function cancelPress() {
+    if (pressTimer.current !== null) clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+  }
+
+  function startPress(profileId: string) {
+    cancelPress();
+    skipClick.current = false;
+    pressTimer.current = setTimeout(() => {
+      pressTimer.current = null;
+      skipClick.current = true;
+      onEdit(profileId);
+    }, LONG_PRESS_MS);
+  }
+
+  useEffect(
+    () => () => {
+      if (pressTimer.current !== null) clearTimeout(pressTimer.current);
+    },
+    [],
+  );
 
   return (
     <div className="prof">
       {profiles.map((profile) => (
-        <IconButton
+        <span
           key={profile.id}
-          label={profileName(profile)}
-          icon={<Icon name={isIconName(profile.icon) ? profile.icon : "layers"} size={20} />}
-          size={44}
-          selected={profile.id === lastProfile}
-          onPress={() =>
-            // Perfil que não existe mais volta como erro do Rust: aparece como aviso.
-            attempt(api.activateProfile(profile.id), () =>
-              notify(`Não foi possível ativar o perfil ${profileName(profile)}.`),
-            )
-          }
-        />
+          className="pslot"
+          onPointerDown={() => startPress(profile.id)}
+          onPointerUp={cancelPress}
+          onPointerLeave={cancelPress}
+          onPointerCancel={cancelPress}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            cancelPress();
+            onEdit(profile.id);
+          }}
+        >
+          <IconButton
+            label={profileName(profile)}
+            icon={<Icon name={isIconName(profile.icon) ? profile.icon : "layers"} size={20} />}
+            size={44}
+            selected={profile.id === lastProfile}
+            onPress={() => {
+              if (skipClick.current) {
+                skipClick.current = false;
+                return;
+              }
+              // Perfil que não existe mais volta como erro do Rust: aparece como aviso.
+              attempt(api.activateProfile(profile.id), () =>
+                notify(`Não foi possível ativar o perfil ${profileName(profile)}.`),
+              );
+            }}
+          />
+        </span>
       ))}
       <span className="pslot add">
         <IconButton label="Novo perfil" icon={<Icon name="plus" size={20} />} size={44} onPress={onAdd} />
@@ -57,6 +105,14 @@ export function ProfileBar({ profiles, lastProfile, onAdd }: ProfileBarProps) {
           </>
         )}
       </div>
+      {current && (
+        <IconButton
+          label={`Editar ${profileName(current)}`}
+          icon={<Icon name="pencil" size={16} />}
+          size={32}
+          onPress={() => onEdit(current.id)}
+        />
+      )}
     </div>
   );
 }

@@ -60,6 +60,12 @@ export interface Profile {
   items: ProfileItem[];
 }
 
+/** App com janela aberta (`list_running_apps`): exe em minúsculas e nome amigável. */
+export interface RunningApp {
+  exe: string;
+  name: string;
+}
+
 export interface Settings {
   shortcut: string;
   autostart: boolean;

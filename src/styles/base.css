@@ -716,3 +716,299 @@ button:focus-visible {
   top: auto;
   bottom: calc(100% + 6px);
 }
+
+/* Botões de ação do editor (mockup C: .btn.pri, .btn.sec). */
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn.pri {
+  flex: 1;
+  background: var(--brass);
+  border-color: var(--brass);
+  color: #1b1a18;
+}
+
+.btn.sec {
+  width: 112px;
+}
+
+.btn.danger {
+  color: var(--danger);
+  border-color: var(--danger-line);
+}
+
+/* Editor de perfil (mockup C). A coluna rola sozinha; o rodapé fica fixo. */
+.ed {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ed-top {
+  gap: 10px;
+}
+
+.ed-title {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.ed-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 2px;
+}
+
+.ed-head {
+  gap: 14px;
+  align-items: center;
+}
+
+.ed-big {
+  width: 70px;
+  height: 70px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--brass);
+  background: var(--brass-bg);
+  border: 1px solid var(--brass);
+  border-radius: 20px;
+  box-shadow: 0 0 0 4px var(--brass-ring);
+}
+
+.ed-namebox {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ed-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ed-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 11px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.ed-input:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}
+
+.ed-input.over {
+  border-color: var(--danger);
+}
+
+.ed-count {
+  flex: none;
+  font-style: normal;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+.ed-count.over {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.ed-err {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.ed-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.ed-icons {
+  display: flex;
+  gap: 6px;
+}
+
+.ed-icons .ibtn {
+  flex: 1;
+  width: auto;
+}
+
+.ed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ed-pr {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 10px;
+}
+
+.ed-app {
+  gap: 10px;
+}
+
+.ed-appname {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ed-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 38px;
+}
+
+.ed-add {
+  width: 100%;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
+  border: 1.5px dashed var(--line);
+  border-radius: 12px;
+  color: var(--mute);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ed-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--mute);
+}
+
+.ed-link {
+  align-self: flex-end;
+  padding: 4px;
+  background: none;
+  border: 0;
+  color: var(--mute);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ed-danger {
+  align-self: flex-start;
+  padding: 4px 0;
+  background: none;
+  border: 0;
+  color: var(--danger);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ed-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--danger-line);
+  background: var(--danger-wash);
+  font-size: 13px;
+}
+
+.ed-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ed-confirm-actions .btn {
+  flex: 1;
+}
+
+.ed-foot {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+
+/* Seletor de app (dentro do editor). */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.picker-top {
+  display: flex;
+  gap: 8px;
+}
+
+.picker .btn {
+  height: 40px;
+  padding: 0 10px;
+  font-size: 12px;
+  flex: none;
+}
+
+.pick-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.pick {
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+}
+
+.pick:hover,
+.pick:focus-visible {
+  background: var(--panel);
+}

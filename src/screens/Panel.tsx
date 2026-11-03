@@ -8,15 +8,17 @@ import { OutputTab } from "./OutputTab";
 import { ProfileBar } from "./ProfileBar";
 
 interface PanelProps {
-  /** Botão "+" da barra de perfis. Ligado ao editor na Task 12. */
+  /** Botão "+" da barra de perfis: abre o editor de perfil novo. */
   onAddProfile: () => void;
+  /** Abre o editor de um perfil existente. */
+  onEditProfile: (profileId: string) => void;
   /** Aba escolhida. Vem da rota, para sobreviver a uma troca de tela. */
   tab: PanelTab;
   onTabChange: (tab: PanelTab) => void;
 }
 
 /** Painel principal (mockups A e A2): perfis, avisos, abas Saída | Microfone. */
-export function Panel({ onAddProfile, tab, onTabChange }: PanelProps) {
+export function Panel({ onAddProfile, onEditProfile, tab, onTabChange }: PanelProps) {
   const state = useAppState();
 
   return (
@@ -25,6 +27,7 @@ export function Panel({ onAddProfile, tab, onTabChange }: PanelProps) {
         profiles={state.profiles}
         lastProfile={state.last_profile}
         onAdd={onAddProfile}
+        onEdit={onEditProfile}
       />
 
       {!state.routing_available && (
