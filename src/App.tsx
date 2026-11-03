@@ -2,15 +2,18 @@ import { Suspense } from "react";
 import "./styles/base.css";
 import { Card } from "./components/Card";
 import { Chip } from "./components/Chip";
-import { useAppState } from "./store";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { retryAppState, useAppState } from "./store";
 
 // Esqueleto da fundação: mostra o título e a saída padrão, lidas do estado do app.
 export default function App() {
   return (
     <main className="win">
-      <Suspense fallback={null}>
-        <Home />
-      </Suspense>
+      <ErrorBoundary onReset={retryAppState}>
+        <Suspense fallback={null}>
+          <Home />
+        </Suspense>
+      </ErrorBoundary>
     </main>
   );
 }

@@ -12,16 +12,17 @@ interface SliderProps {
   /** `brass` = trilho dourado (volume de dispositivo); `text` = claro (volume de app). */
   tone?: "text" | "brass";
   icon?: ReactNode;
-  /** Nome acessível do controle. */
-  label?: string;
+  /** Nome acessível do controle (obrigatório). */
+  label: string;
 }
 
 /**
  * Barra de volume. Usa um `<input type="range">` invisível por cima do trilho: teclado e
  * ponteiro vêm de graça, e a área de toque é mais alta que o trilho de 6px.
+ * O valor mostrado é arredondado depois do clamp.
  */
-export function Slider({ value, onChange, tone = "text", icon, label = "Volume" }: SliderProps) {
-  const v = clampPercent(value);
+export function Slider({ value, onChange, tone = "text", icon, label }: SliderProps) {
+  const v = Math.round(clampPercent(value));
   return (
     <div className="row slider-row">
       {icon}

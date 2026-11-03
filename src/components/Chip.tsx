@@ -29,7 +29,13 @@ export function Chip({ kind, tone, label, onPress, icon }: ChipProps) {
     );
   }
   return (
-    <button type="button" className={className} data-kind={kind} onClick={onPress}>
+    <button
+      type="button"
+      className={className}
+      data-kind={kind}
+      aria-haspopup="menu"
+      onClick={onPress}
+    >
       {body}
     </button>
   );

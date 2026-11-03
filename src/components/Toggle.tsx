@@ -1,8 +1,8 @@
 interface ToggleProps {
   on: boolean;
   onChange: (value: boolean) => void;
-  /** Nome acessível do interruptor. */
-  label?: string;
+  /** Nome acessível do interruptor (obrigatório: o botão não tem texto visível). */
+  label: string;
 }
 
 export function Toggle({ on, onChange, label }: ToggleProps) {

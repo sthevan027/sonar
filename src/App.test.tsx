@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import * as api from "./api";
 import type { AppState } from "./types";
 
 const state: AppState = {
@@ -38,6 +39,16 @@ vi.mock("./api", () => ({
 afterEach(() => cleanup());
 
 describe("App", () => {
+  it("mostra a falha de get_state e carrega ao tentar de novo", async () => {
+    vi.mocked(api.getState).mockRejectedValueOnce(new Error("sem backend"));
+    render(<App />);
+    expect(await screen.findByText("Não foi possível carregar")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    expect(await screen.findByText("Caixa")).toBeTruthy();
+    expect(screen.getByText("Sonar")).toBeTruthy();
+  });
+
   it("renderiza o nome Sonar e a saída padrão", async () => {
     render(<App />);
     expect(await screen.findByText("Caixa")).toBeTruthy();

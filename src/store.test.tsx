@@ -78,4 +78,45 @@ describe("createAppStore", () => {
     });
     expect((await waitReady(store)).last_profile).toBe("snapshot");
   });
+
+  it("store_failure_then_retry_reloads_without_resubscribing", async () => {
+    let listens = 0;
+    let calls = 0;
+    const store = createAppStore({
+      onStateChanged: async () => {
+        listens += 1;
+        return () => {};
+      },
+      getState: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("sem backend");
+        return makeState("depois do retry");
+      },
+    });
+
+    await expect(waitReady(store)).rejects.toThrow("sem backend");
+
+    store.retry();
+    expect((await waitReady(store)).last_profile).toBe("depois do retry");
+    expect(calls).toBe(2);
+    expect(listens).toBe(1);
+  });
+
+  it("store_retries_subscription_when_listen_failed", async () => {
+    let listens = 0;
+    const store = createAppStore({
+      onStateChanged: async () => {
+        listens += 1;
+        if (listens === 1) throw new Error("evento indisponível");
+        return () => {};
+      },
+      getState: async () => makeState("ok"),
+    });
+
+    await expect(waitReady(store)).rejects.toThrow("evento indisponível");
+
+    store.retry();
+    expect((await waitReady(store)).last_profile).toBe("ok");
+    expect(listens).toBe(2);
+  });
 });

@@ -36,7 +36,9 @@ describe("Chip", () => {
   it("chip_calls_onPress_on_click", () => {
     const onPress = vi.fn();
     render(<Chip kind="device" tone="brass" label="Caixa" onPress={onPress} />);
-    fireEvent.click(screen.getByRole("button", { name: "Caixa" }));
+    const button = screen.getByRole("button", { name: "Caixa" });
+    expect(button.getAttribute("aria-haspopup")).toBe("menu");
+    fireEvent.click(button);
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 });
