@@ -70,13 +70,54 @@ describe("Settings", () => {
     fireEvent.click(keys);
 
     fireEvent.keyDown(keys, { key: "k", code: "KeyK" });
-    expect(screen.getByText("Inclua Ctrl, Alt, Shift ou Win.")).toBeTruthy();
+    const hint = screen.getByText("Inclua Ctrl, Alt ou Win.");
+    // A dica é anunciada por leitor de tela (região viva, educada).
+    expect(hint.getAttribute("aria-live")).toBe("polite");
+    expect(api.saveSettings).not.toHaveBeenCalled();
+
+    // Shift sozinho não conta como modificador de atalho global.
+    fireEvent.keyDown(keys, { key: "k", code: "KeyK", shiftKey: true });
+    expect(screen.getByText("Inclua Ctrl, Alt ou Win.")).toBeTruthy();
     expect(api.saveSettings).not.toHaveBeenCalled();
 
     fireEvent.keyDown(keys, { key: "k", code: "KeyK", ctrlKey: true });
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenCalledWith({ shortcut: "Ctrl+K", autostart: false }),
     );
+  });
+
+  it("double_toggle_ends_with_last_value_in_order", async () => {
+    setup();
+    const toggle = await screen.findByRole("switch", { name: "Iniciar com o Windows" });
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2));
+    // Cada gravação leva o pedido vigente; a última fica com o valor final (desligado).
+    const calls = vi.mocked(api.saveSettings).mock.calls;
+    expect(calls[calls.length - 1][0].autostart).toBe(false);
+    expect(
+      screen.getByRole("switch", { name: "Iniciar com o Windows" }).getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
+  it("failure_rolls_back_only_the_failed_field", async () => {
+    setup();
+    // A primeira gravação (ligar o autostart) falha; a segunda (atalho) passa.
+    vi.mocked(api.saveSettings).mockRejectedValueOnce(new Error("disco cheio"));
+    fireEvent.click(await screen.findByRole("switch", { name: "Iniciar com o Windows" }));
+    const keys = screen.getByRole("button", { name: /Atalho global/ });
+    fireEvent.click(keys);
+    fireEvent.keyDown(keys, { key: "k", code: "KeyK", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith({ shortcut: "Ctrl+K", autostart: false }),
+    );
+    expect(await screen.findByText("Não foi possível salvar a configuração.")).toBeTruthy();
+    expect(
+      screen.getByRole("switch", { name: "Iniciar com o Windows" }).getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(screen.getByRole("button", { name: "Atalho global: Ctrl K. Toque para trocar." })).toBeTruthy();
   });
 
   it("restore_default_shortcut_link_saves_super_alt_v", async () => {

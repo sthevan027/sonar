@@ -44,9 +44,13 @@ function mainKeyOf(code: string): string | null {
   return null;
 }
 
+/** Mensagem quando a combinação não tem Ctrl, Alt nem Win (Shift sozinho não conta). */
+export const SHORTCUT_MODIFIER_MESSAGE = "Inclua Ctrl, Alt ou Win.";
+
 /**
- * Combinação pedida na captura do atalho. Exige uma tecla principal e pelo menos um
- * modificador (Ctrl, Alt, Shift ou Win). Ordem fixa: Ctrl, Alt, Shift, Super.
+ * Combinação pedida na captura do atalho. Exige uma tecla principal e pelo menos um dos
+ * modificadores Ctrl, Alt ou Win. Shift sozinho não basta (digitar uma letra não pode virar
+ * atalho global). Ordem fixa: Ctrl, Alt, Shift, Super.
  */
 export function shortcutFromKeys(input: KeyInput): ShortcutOutcome {
   if (MODIFIER_CODE.test(input.code)) return { status: "wait" };
@@ -59,8 +63,9 @@ export function shortcutFromKeys(input: KeyInput): ShortcutOutcome {
   if (input.altKey) modifiers.push("Alt");
   if (input.shiftKey) modifiers.push("Shift");
   if (input.metaKey) modifiers.push("Super");
-  if (modifiers.length === 0) {
-    return { status: "invalid", message: "Inclua Ctrl, Alt, Shift ou Win." };
+  const strong = input.ctrlKey || input.altKey || input.metaKey;
+  if (!strong) {
+    return { status: "invalid", message: SHORTCUT_MODIFIER_MESSAGE };
   }
   return { status: "ok", shortcut: [...modifiers, main].join("+") };
 }

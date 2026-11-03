@@ -19,7 +19,11 @@ export function iconOf(device: DeviceView): IconName {
   return iconNameOf(device) ?? (device.flow === "capture" ? "mic" : "speaker");
 }
 
-/** Só os dispositivos que o painel mostra nos seletores: conectados e não ocultos. */
+/**
+ * Dispositivos conectados e não ocultos, de qualquer fluxo: quem chama filtra o fluxo (o
+ * painel de saída filtra `render`). Não inclui um dispositivo oculto que esteja em rota ativa:
+ * para o menu de uma rota, use `selectableDevices` (que mantém o selecionado).
+ */
 export function visibleDevices(devices: DeviceView[]): DeviceView[] {
   return devices.filter((d) => d.connected && !d.hidden);
 }

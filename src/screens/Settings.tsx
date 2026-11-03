@@ -21,46 +21,90 @@ interface SettingsProps {
 }
 
 /**
- * Configurações (mockup E). Lê e grava por `get_settings` e `save_settings`. Iniciar com o
- * Windows e o atalho só guardam a escolha aqui: registrar de fato é trabalho da próxima tarefa.
+ * Fila global de `save_settings`: a ordem de envio é a de chegada no Rust. O corpo de cada
+ * gravação é montado na hora de rodar (com o que está pedido naquele momento), e a falha de
+ * um campo roda antes da próxima gravação da fila.
+ */
+let settingsQueue: Promise<void> = Promise.resolve();
+
+function enqueueSettings(call: () => Promise<void>, onFail: () => void) {
+  settingsQueue = settingsQueue.then(() => call().catch(onFail));
+}
+
+/**
+ * Configurações (mockup E). O estado vem do store (`state.settings`); `get_settings` só entra
+ * como reserva se o estado não trouxer configurações. Mudança aparece na hora (sobreposição
+ * local) e vai para `save_settings` em fila. Se um campo falha, só ele volta ao valor
+ * confirmado. Iniciar com o Windows e o atalho só guardam a escolha: registrar é a Task 14.
  */
 export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProps) {
   const state = useAppState();
   const notify = useToast();
-  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const storeSettings = state.settings as AppSettings | undefined;
+  const [fallback, setFallback] = useState<AppSettings | null>(null);
+  const confirmed = storeSettings ?? fallback;
+  // Campos pedidos e ainda não confirmados pelo store. `wanted` é o espelho síncrono da fila.
+  const [overlay, setOverlay] = useState<Partial<AppSettings>>({});
+  const wanted = useRef<Partial<AppSettings>>({});
+  const base = useRef<AppSettings | null>(confirmed);
   const [capturing, setCapturing] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const keysRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
+    if (storeSettings) return;
     let alive = true;
     api.getSettings().then(
       (loaded) => {
-        if (alive) setSettings(loaded);
+        if (alive) setFallback(loaded);
       },
       () => notify("Não foi possível carregar as configurações."),
     );
     return () => {
       alive = false;
     };
-  }, [notify]);
+  }, [storeSettings, notify]);
+
+  // Quando o store confirma um valor pedido, a sobreposição daquele campo sai.
+  useEffect(() => {
+    base.current = confirmed;
+    if (!confirmed) return;
+    const keep: Partial<AppSettings> = { ...wanted.current };
+    for (const key of Object.keys(keep) as (keyof AppSettings)[]) {
+      if (keep[key] === confirmed[key]) delete keep[key];
+    }
+    wanted.current = keep;
+    setOverlay(keep);
+  }, [confirmed]);
 
   useEffect(() => {
     if (capturing) keysRef.current?.focus();
   }, [capturing]);
 
-  /** Mostra a mudança na hora; se o Rust recusar, volta ao valor anterior e avisa. */
-  function save(next: AppSettings) {
-    const previous = settings;
-    setSettings(next);
-    api.saveSettings(next).catch(() => {
-      setSettings(previous);
-      notify("Não foi possível salvar a configuração.");
-    });
+  /** Mostra a mudança na hora e a manda para a fila. Falha: só este campo volta. */
+  function change<K extends keyof AppSettings>(field: K, value: AppSettings[K]) {
+    wanted.current = { ...wanted.current, [field]: value };
+    setOverlay(wanted.current);
+    enqueueSettings(
+      () => {
+        const current = base.current;
+        if (!current) return Promise.resolve();
+        return api.saveSettings({ ...current, ...wanted.current });
+      },
+      () => {
+        const rest = { ...wanted.current };
+        delete rest[field];
+        wanted.current = rest;
+        setOverlay(rest);
+        notify("Não foi possível salvar a configuração.");
+      },
+    );
   }
 
+  const shown: AppSettings | null = confirmed ? { ...confirmed, ...overlay } : null;
+
   function onShortcutKey(event: KeyboardEvent<HTMLButtonElement>) {
-    if (!capturing || !settings) return;
+    if (!capturing || !shown) return;
     // Tab sai da captura (o foco segue o caminho normal).
     if (event.key === "Tab") return;
     event.preventDefault();
@@ -77,12 +121,13 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
     }
     setCapturing(false);
     setHint(null);
-    save({ ...settings, shortcut: outcome.shortcut });
+    change("shortcut", outcome.shortcut);
   }
 
-  const keys = settings ? shortcutKeys(settings.shortcut) : [];
+  const keys = shown ? shortcutKeys(shown.shortcut) : [];
   const outputs = state.devices.filter((d) => d.flow === "render").length;
   const inputs = state.devices.filter((d) => d.flow === "capture").length;
+  const helpText = hint ?? (capturing ? "Pressione a combinação. Esc cancela." : "Abre o painel na hora");
 
   return (
     <div className="tab-body">
@@ -107,11 +152,11 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
               <b>Iniciar com o Windows</b>
               <span>Abre na bandeja ao ligar o PC</span>
             </div>
-            {settings && (
+            {shown && (
               <Toggle
                 label="Iniciar com o Windows"
-                on={settings.autostart}
-                onChange={(on) => save({ ...settings, autostart: on })}
+                on={shown.autostart}
+                onChange={(on) => change("autostart", on)}
               />
             )}
           </div>
@@ -122,14 +167,14 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
             </div>
             <div className="tx">
               <b>Atalho global</b>
-              <span className={hint ? "bad" : undefined}>
-                {hint ?? "Abre o painel na hora"}
+              <span className={hint ? "bad" : undefined} aria-live="polite">
+                {helpText}
               </span>
-              {settings && settings.shortcut !== DEFAULT_SHORTCUT && (
+              {shown && shown.shortcut !== DEFAULT_SHORTCUT && (
                 <button
                   type="button"
                   className="rst"
-                  onClick={() => save({ ...settings, shortcut: DEFAULT_SHORTCUT })}
+                  onClick={() => change("shortcut", DEFAULT_SHORTCUT)}
                 >
                   <Icon name="rotate-ccw" size={14} />
                   Restaurar atalho padrão (Win Alt V)
@@ -140,7 +185,7 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
               ref={keysRef}
               type="button"
               className="keys-btn"
-              disabled={!settings}
+              disabled={!shown}
               aria-label={
                 capturing
                   ? "Digite a combinação do atalho"
@@ -190,7 +235,7 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
             </div>
             <div className="tx">
               <b>Perfis</b>
-              <span>Criar, editar e apagar</span>
+              <span>Abre a barra de perfis no painel</span>
             </div>
             <span className="cnt">{state.profiles.length}</span>
             <Icon name="chevron-right" size={18} />

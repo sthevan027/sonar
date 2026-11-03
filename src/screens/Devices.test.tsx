@@ -119,6 +119,48 @@ describe("Devices", () => {
     );
   });
 
+  it("eye_after_valid_draft_writes_new_name_and_hidden", async () => {
+    setDevices([
+      device({ id: "c1", display_name: "Caixa", windows_name: "Alto-falantes", icon: "speaker" }),
+    ]);
+    renderDevices();
+    fireEvent.click(screen.getByRole("button", { name: "Editar Caixa" }));
+    fireEvent.change(screen.getByLabelText("Nome no painel"), { target: { value: "Nova" } });
+    // Sem Enter nem blur: o olho leva o rascunho válido junto com a mudança de oculto.
+    fireEvent.click(screen.getByRole("button", { name: "Ocultar Caixa no painel" }));
+
+    await waitFor(() =>
+      expect(api.updateDeviceMeta).toHaveBeenCalledWith("c1", "Nova", "speaker", true),
+    );
+    expect(api.updateDeviceMeta).toHaveBeenCalledTimes(1);
+  });
+
+  it("device_name_control_chars_and_surrogate_pairs", async () => {
+    setDevices([device({ id: "c1", display_name: "Caixa", windows_name: "Alto-falantes", is_default: true })]);
+    renderDevices();
+    fireEvent.click(screen.getByRole("button", { name: "Editar Caixa" }));
+    const input = screen.getByLabelText("Nome no painel");
+
+    // Caractere de controle (BEL) bloqueia o salvar.
+    fireEvent.change(input, { target: { value: "Ca\u0007ixa" } });
+    expect(screen.getByRole("alert").textContent).toContain("caracteres de controle");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(api.updateDeviceMeta).not.toHaveBeenCalled();
+
+    // Emoji é um ponto de código (duas unidades de código cada): 20 emojis cabem, 21 não.
+    fireEvent.change(input, { target: { value: "😀".repeat(20) } });
+    expect(screen.getByText("20 / 20")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(api.updateDeviceMeta).toHaveBeenCalledWith("c1", "😀".repeat(20), null, false),
+    );
+
+    fireEvent.change(input, { target: { value: "😀".repeat(21) } });
+    expect(screen.getByText("21 / 20")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(api.updateDeviceMeta).toHaveBeenCalledTimes(1);
+  });
+
   it("hidden_device_not_listed_in_panel_chips", () => {
     const devices = [
       device({ id: "caixa", display_name: "Caixa" }),
