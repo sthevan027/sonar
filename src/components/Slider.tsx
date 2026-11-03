@@ -23,7 +23,7 @@ interface SliderProps {
 export function Slider({ value, onChange, tone = "text", icon, label = "Volume" }: SliderProps) {
   const v = clampPercent(value);
   return (
-    <div className="row">
+    <div className="row slider-row">
       {icon}
       <div className={tone === "brass" ? "track br" : "track"}>
         <i style={{ width: `${v}%` }} />

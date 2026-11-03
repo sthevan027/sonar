@@ -5,21 +5,21 @@ interface IconButtonProps {
   label: string;
   icon: ReactNode;
   onPress: () => void;
-  /** Lado em px: 32 (padrão, `.ab`), 34 (voltar), 38 ou 44 (perfil). */
+  /** Lado em px, como nos mockups: 32 (`.ab`), 34 (`.back`), 38 (`.g`) ou 44 (`.pbtn`). */
   size?: 32 | 34 | 38 | 44;
   selected?: boolean;
   disabled?: boolean;
 }
 
 export function IconButton({ label, icon, onPress, size = 32, selected, disabled }: IconButtonProps) {
+  const className = ["ibtn", `s${size}`, selected ? "sel" : ""].filter(Boolean).join(" ");
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
       disabled={disabled}
-      className={selected ? "ibtn sel" : "ibtn"}
-      style={{ width: size, height: size, borderRadius: size >= 38 ? 11 : size === 34 ? 10 : 9 }}
+      className={className}
       onClick={onPress}
     >
       {icon}

@@ -82,6 +82,11 @@ button:focus-visible {
   gap: 11px;
 }
 
+/* Linha de volume (ícone + barra + %), gap 10 como nos mockups. */
+.slider-row {
+  gap: 10px;
+}
+
 /* Cartão. `edit` = perfil em edição (contorno dourado); `off` = desligado (apagado). */
 .card {
   background: var(--card);
@@ -202,6 +207,23 @@ button:focus-visible {
   margin: 0;
   opacity: 0;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+}
+
+/* Polegar sem tamanho: o ponteiro mapeia para a largura inteira, como a bolinha `u`. */
+.track-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 0;
+}
+
+.track-input::-moz-range-thumb {
+  width: 0;
+  height: 0;
+  border: 0;
 }
 
 .track:focus-within u {
@@ -248,7 +270,7 @@ button:focus-visible {
   background: var(--mute);
 }
 
-/* Botão só de ícone. */
+/* Botão só de ícone. Medidas e fundo de cada tamanho vêm dos mockups (.ab, .back, .g, .pbtn). */
 .ibtn {
   display: grid;
   place-items: center;
@@ -257,9 +279,39 @@ button:focus-visible {
   border: 1px solid var(--line);
 }
 
+.ibtn.s32 {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+
+.ibtn.s34 {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.ibtn.s38 {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+
+.ibtn.s44 {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  background: var(--card);
+}
+
 .ibtn.sel {
   border-color: var(--brass);
   background: var(--brass-bg);
+}
+
+.ibtn.s44.sel {
+  box-shadow: 0 0 0 3px var(--brass-ring);
 }
 
 /* Ícone do app; sem ícone, a inicial num bloco neutro (sem cor de marca). */

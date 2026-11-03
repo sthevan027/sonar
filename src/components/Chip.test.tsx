@@ -2,8 +2,20 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Chip } from "./Chip";
+import { clampPercent } from "./Slider";
 
 afterEach(() => cleanup());
+
+describe("clampPercent", () => {
+  it("slider_clamps_to_0_100", () => {
+    expect(clampPercent(-5)).toBe(0);
+    expect(clampPercent(150)).toBe(100);
+    expect(clampPercent(42)).toBe(42);
+    expect(clampPercent(0)).toBe(0);
+    expect(clampPercent(100)).toBe(100);
+    expect(clampPercent(Number.NaN)).toBe(0);
+  });
+});
 
 describe("Chip", () => {
   it("chip_renders_label_and_tone_class", () => {
