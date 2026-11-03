@@ -11,6 +11,7 @@ mod state;
 mod engine;
 mod commands;
 
+use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
@@ -69,11 +70,13 @@ pub fn run() {
 /// Cria o `Engine` com as implementações do Windows e liga as fontes de atualização.
 /// Todas as threads são destacadas: não seguram o processo depois que o app fecha.
 fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let data_dir = ProjectDirs::from("com", "sthevandev", "sonar")
-        .ok_or("não foi possível localizar a pasta de dados do usuário")?
-        .data_dir()
-        .to_path_buf();
-    std::fs::create_dir_all(&data_dir)?;
+    let project = ProjectDirs::from("com", "sthevandev", "sonar")
+        .map(|dirs| dirs.data_dir().to_path_buf());
+    let data_dir = resolve_data_dir(project, std::env::temp_dir().join("sonar"));
+    // Sem pasta, o app segue: a gravação falha e aparece em `save_error`.
+    if let Err(err) = std::fs::create_dir_all(&data_dir) {
+        eprintln!("sonar: não foi possível criar {}: {err}", data_dir.display());
+    }
 
     let app_handle = app.handle().clone();
     let notify_handle = app_handle.clone();
@@ -94,8 +97,10 @@ fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
     {
         let engine = engine.clone();
         std::thread::spawn(move || {
-            engine.refresh();
-            dump_state_once(&engine);
+            guarded("leitura inicial", || {
+                engine.refresh();
+                dump_state_once(&engine);
+            });
         });
     }
 
@@ -110,7 +115,7 @@ fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
                 while rx.recv().is_ok() {
                     // Junta os eventos que já chegaram: uma releitura cobre todos.
                     while rx.try_recv().is_ok() {}
-                    engine.refresh();
+                    guarded("releitura por evento", || engine.refresh());
                 }
             });
         }
@@ -133,7 +138,7 @@ fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
                     SAFETY_HIDDEN
                 };
                 if last.elapsed() >= every {
-                    engine.refresh();
+                    guarded("releitura periódica", || engine.refresh());
                     last = Instant::now();
                 }
             }
@@ -145,23 +150,41 @@ fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
         let engine = engine.clone();
         let app_handle = app_handle.clone();
         std::thread::spawn(move || loop {
-            if !panel_visible(&app_handle) {
-                std::thread::sleep(MIC_IDLE);
-                continue;
-            }
-            match engine.default_capture() {
-                Some(id) => {
+            let mut pause = MIC_IDLE;
+            guarded("medidor do microfone", || {
+                if !panel_visible(&app_handle) {
+                    return;
+                }
+                if let Some(id) = engine.default_capture() {
                     let peak = engine.mic_peak(&id);
                     let level = MicLevel { id: id.0, peak };
                     let _ = app_handle.emit(commands::MIC_LEVEL, level);
-                    std::thread::sleep(MIC_INTERVAL);
+                    pause = MIC_INTERVAL;
                 }
-                None => std::thread::sleep(MIC_IDLE),
-            }
+            });
+            std::thread::sleep(pause);
         });
     }
 
     Ok(())
+}
+
+/// Pasta de dados: a do sistema quando existe, senão a de reserva.
+fn resolve_data_dir(project: Option<PathBuf>, fallback: PathBuf) -> PathBuf {
+    project.unwrap_or(fallback)
+}
+
+/// Roda `f` segurando pânico: loga e devolve `false` se ele ocorreu, para a thread
+/// seguir no laço. Em build de release `panic = "abort"` (Cargo.toml) não há o que
+/// segurar; o guarda só vale em depuração e nos testes.
+fn guarded(label: &str, f: impl FnOnce()) -> bool {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(()) => true,
+        Err(_) => {
+            eprintln!("sonar: {label} falhou com pânico; seguindo");
+            false
+        }
+    }
 }
 
 fn panel_visible(app: &AppHandle) -> bool {
@@ -185,3 +208,33 @@ fn dump_state_once(engine: &Engine) {
 
 #[cfg(not(debug_assertions))]
 fn dump_state_once(_engine: &Engine) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_dir_uses_project_path_when_available() {
+        let project = PathBuf::from("dados").join("sonar");
+        let fallback = PathBuf::from("temp").join("sonar");
+        assert_eq!(resolve_data_dir(Some(project.clone()), fallback), project);
+    }
+
+    #[test]
+    fn data_dir_uses_fallback_when_project_dirs_missing() {
+        let fallback = PathBuf::from("temp").join("sonar");
+        assert_eq!(resolve_data_dir(None, fallback.clone()), fallback);
+    }
+
+    #[test]
+    fn guarded_returns_true_when_closure_completes() {
+        let mut ran = false;
+        assert!(guarded("teste", || ran = true));
+        assert!(ran);
+    }
+
+    #[test]
+    fn guarded_contains_panic_and_returns_false() {
+        assert!(!guarded("teste", || panic!("falha de propósito")));
+    }
+}
