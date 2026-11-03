@@ -36,6 +36,15 @@ use super::sessions::{keep_real_sessions, register_session_notifier, sessions_on
 use super::types::AudioError;
 use super::types::{AudioEvent, AudioSession, AudioSource, Device, DeviceId, Flow};
 
+/// Mantém só os `Ok` de uma enumeração. Um item que falha (ex.: sumiu entre `GetCount` e
+/// `Item`) é descartado sozinho, sem esconder os outros.
+pub(super) fn collect_ok<T, E, I>(items: I) -> Vec<T>
+where
+    I: IntoIterator<Item = Result<T, E>>,
+{
+    items.into_iter().filter_map(Result::ok).collect()
+}
+
 /// Erro do Windows vira `AudioError::Os` com o HRESULT.
 #[cfg(windows)]
 pub(super) fn to_audio_error(e: windows::core::Error) -> AudioError {
@@ -99,13 +108,11 @@ fn active_endpoints(
     let collection = unsafe { enumerator.EnumAudioEndpoints(edata_flow(flow), DEVICE_STATE_ACTIVE) }
         .map_err(to_audio_error)?;
     let count = unsafe { collection.GetCount() }.map_err(to_audio_error)?;
-    let mut out = Vec::with_capacity(count as usize);
-    for index in 0..count {
+    Ok(collect_ok((0..count).map(|index| -> Result<(IMMDevice, DeviceId), AudioError> {
         let device = unsafe { collection.Item(index) }.map_err(to_audio_error)?;
         let id = device_id(&device)?;
-        out.push((device, id));
-    }
-    Ok(out)
+        Ok((device, id))
+    })))
 }
 
 /// Todos os endpoints, inclusive desconectados e não presentes (`DEVICE_STATEMASK_ALL`),
@@ -121,21 +128,21 @@ fn list_devices(enumerator: &IMMDeviceEnumerator) -> Result<Vec<Device>, AudioEr
         }
         .map_err(to_audio_error)?;
         let count = unsafe { collection.GetCount() }.map_err(to_audio_error)?;
-        for index in 0..count {
+        out.extend(collect_ok((0..count).map(|index| -> Result<Device, AudioError> {
             let device = unsafe { collection.Item(index) }.map_err(to_audio_error)?;
             let id = device_id(&device)?;
             let state = unsafe { device.GetState() }.map_err(to_audio_error)?;
             let name = friendly_name(&device)
                 .filter(|n| !n.is_empty())
                 .unwrap_or_else(|| id.0.clone());
-            out.push(Device {
+            Ok(Device {
                 is_default: default.as_ref() == Some(&id),
                 connected: state == DEVICE_STATE_ACTIVE,
                 id,
                 flow,
                 name,
-            });
-        }
+            })
+        })));
     }
     Ok(out)
 }
@@ -335,6 +342,23 @@ pub fn watch(sender: Sender<AudioEvent>) -> Result<WatchHandle, AudioError> {
             let _ = thread.join();
             Err(AudioError::Unsupported("thread de notificações encerrou".into()))
         }
+    }
+}
+
+#[cfg(test)]
+mod skip_tests {
+    use super::collect_ok;
+
+    #[test]
+    fn failing_item_does_not_hide_others() {
+        let items: Vec<Result<u32, &str>> = vec![Ok(1), Err("sumiu"), Ok(3), Err("sumiu"), Ok(5)];
+        assert_eq!(collect_ok(items), vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn all_failing_items_give_empty_list() {
+        let items: Vec<Result<u32, &str>> = vec![Err("a"), Err("b")];
+        assert!(collect_ok(items).is_empty());
     }
 }
 

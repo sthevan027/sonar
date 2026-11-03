@@ -10,7 +10,8 @@ use windows::core::{implement, Interface, Ref};
 use windows::Win32::Foundation::CloseHandle;
 #[cfg(windows)]
 use windows::Win32::Media::Audio::{
-    IAudioSessionControl, IAudioSessionControl2, IAudioSessionManager2, IAudioSessionNotification,
+    IAudioSessionControl, IAudioSessionControl2, IAudioSessionEnumerator, IAudioSessionManager2,
+    IAudioSessionNotification,
     IAudioSessionNotification_Impl, IMMDevice, ISimpleAudioVolume, AudioSessionStateActive,
 };
 #[cfg(windows)]
@@ -23,7 +24,7 @@ use windows::Win32::System::Threading::{
 };
 
 #[cfg(windows)]
-use super::devices::to_audio_error;
+use super::devices::{collect_ok, to_audio_error};
 #[cfg(windows)]
 use super::types::AudioError;
 use super::types::{AudioEvent, AudioSession, DeviceId, Flow};
@@ -81,28 +82,47 @@ pub(super) fn sessions_on(
     // SAFETY: chamadas sem ponteiros próprios; o gerenciador está vivo neste escopo.
     let list = unsafe { manager.GetSessionEnumerator() }.map_err(to_audio_error)?;
     let count = unsafe { list.GetCount() }.map_err(to_audio_error)?;
-    let mut out = Vec::with_capacity(count as usize);
-    for index in 0..count {
-        let control: IAudioSessionControl =
-            unsafe { list.GetSession(index) }.map_err(to_audio_error)?;
-        let control2: IAudioSessionControl2 = control.cast().map_err(to_audio_error)?;
-        let volume: ISimpleAudioVolume = control.cast().map_err(to_audio_error)?;
-        // SAFETY: consultas simples sobre a sessão recém-obtida.
-        let pid = unsafe { control2.GetProcessId() }.map_err(to_audio_error)?;
-        let state = unsafe { control2.GetState() }.map_err(to_audio_error)?;
-        let level = unsafe { volume.GetMasterVolume() }.map_err(to_audio_error)?;
-        let muted = unsafe { volume.GetMute() }.map_err(to_audio_error)?.as_bool();
-        out.push(AudioSession {
-            pid,
-            exe: process_exe(pid),
-            flow,
-            device: device_id.clone(),
-            active: state == AudioSessionStateActive,
-            volume: level.clamp(0.0, 1.0),
-            muted,
-        });
-    }
-    Ok(out)
+    Ok(collect_ok(
+        (0..count).map(|index| session_at(&list, index, device_id, flow)),
+    ))
+}
+
+/// Uma sessão. Erro em controle, pid ou estado descarta só esta sessão (ver `collect_ok`).
+/// Volume ou mudo que não puderem ser lidos caem para 1.0 e falso.
+#[cfg(windows)]
+fn session_at(
+    list: &IAudioSessionEnumerator,
+    index: i32,
+    device_id: &DeviceId,
+    flow: Flow,
+) -> Result<AudioSession, AudioError> {
+    let control: IAudioSessionControl = unsafe { list.GetSession(index) }.map_err(to_audio_error)?;
+    let control2: IAudioSessionControl2 = control.cast().map_err(to_audio_error)?;
+    // SAFETY: consultas simples sobre a sessão recém-obtida.
+    let pid = unsafe { control2.GetProcessId() }.map_err(to_audio_error)?;
+    let state = unsafe { control2.GetState() }.map_err(to_audio_error)?;
+    let (level, muted) = volume_of(&control);
+    Ok(AudioSession {
+        pid,
+        exe: process_exe(pid),
+        flow,
+        device: device_id.clone(),
+        active: state == AudioSessionStateActive,
+        volume: level,
+        muted,
+    })
+}
+
+/// Volume mestre (0.0..=1.0) e mudo. Falha em qualquer leitura usa 1.0 e falso.
+#[cfg(windows)]
+fn volume_of(control: &IAudioSessionControl) -> (f32, bool) {
+    let Ok(volume) = control.cast::<ISimpleAudioVolume>() else {
+        return (1.0, false);
+    };
+    // SAFETY: consultas simples sobre o controle de volume da sessão.
+    let level = unsafe { volume.GetMasterVolume() }.unwrap_or(1.0);
+    let muted = unsafe { volume.GetMute() }.map(|m| m.as_bool()).unwrap_or(false);
+    (level.clamp(0.0, 1.0), muted)
 }
 
 /// Registra o callback de sessões criadas no gerenciador de um dispositivo.
