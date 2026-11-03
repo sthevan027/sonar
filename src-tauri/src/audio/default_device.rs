@@ -116,6 +116,7 @@ pub struct WindowsDefaultDevice;
 #[cfg(windows)]
 impl DefaultDevice for WindowsDefaultDevice {
     fn set_default(&self, id: &DeviceId, flow: Flow) -> Result<(), AudioError> {
+        ensure_com()?;
         check_flow(id, flow)?;
         let policy = PolicyConfig::open()?;
         let mut first_err = None;
@@ -135,11 +136,20 @@ mod manual_tests {
     use windows::Win32::Media::Audio::IMMDeviceEnumerator;
 
     /// Padrão atual de um papel no fluxo, ou `None` se não houver.
+    /// Roda em thread próprio: a leitura inicializa o COM ali, sem afetar o thread do
+    /// `set_default`, que precisa começar sem COM inicializado.
     fn current_default(flow: Flow, role: ERole) -> Option<DeviceId> {
-        let enumerator: IMMDeviceEnumerator = create_enumerator().ok()?;
-        // SAFETY: consulta ao enumerador, sem ponteiros próprios.
-        let device = unsafe { enumerator.GetDefaultAudioEndpoint(edata_flow(flow), role) }.ok()?;
-        device_id(&device).ok()
+        std::thread::spawn(move || {
+            ensure_com().ok()?;
+            let enumerator: IMMDeviceEnumerator = create_enumerator().ok()?;
+            // SAFETY: consulta ao enumerador, sem ponteiros próprios.
+            let device =
+                unsafe { enumerator.GetDefaultAudioEndpoint(edata_flow(flow), role) }.ok()?;
+            device_id(&device).ok()
+        })
+        .join()
+        .ok()
+        .flatten()
     }
 
     /// Restaura os papéis originais no Drop, mesmo se uma asserção falhar.
@@ -177,7 +187,7 @@ mod manual_tests {
             "capture" => Flow::Capture,
             other => panic!("SONAR_TEST_DEFAULT_FLOW inválido: {other} (use render ou capture)"),
         };
-        ensure_com().expect("COM");
+        // Sem `ensure_com` aqui: o `set_default` precisa ser o primeiro a usar COM neste thread.
         let target = DeviceId(device);
         let originals: Vec<(ERole, DeviceId)> = [eConsole, eMultimedia, eCommunications]
             .into_iter()
