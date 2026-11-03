@@ -4,7 +4,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { AppState, Flow, MicLevel, Profile, RunningApp, Settings } from "./types";
+import type {
+  AppState,
+  Flow,
+  MicLevel,
+  Profile,
+  RunningApp,
+  Settings,
+  UpdateInfo,
+  UpdateProgress,
+} from "./types";
 
 export function getState(): Promise<AppState> {
   return invoke<AppState>("get_state");
@@ -99,6 +108,37 @@ export function appIcon(exe: string): Promise<string | null> {
     });
   }
   return pending;
+}
+
+/**
+ * Procura versão nova no endpoint configurado. Devolve `null` quando já está na mais recente.
+ * Rejeita com a frase do Rust (sem rede, sem release, assinatura inválida).
+ */
+export function checkForUpdate(): Promise<UpdateInfo | null> {
+  return invoke<UpdateInfo | null>("check_for_update");
+}
+
+/** Versão já encontrada nesta execução, ou `null`. A engrenagem consulta ao montar. */
+export function pendingUpdate(): Promise<UpdateInfo | null> {
+  return invoke<UpdateInfo | null>("pending_update");
+}
+
+/**
+ * Baixa e instala. No Windows o app fecha e reabre na versão nova, então a promessa pode nunca
+ * resolver: quem chama deve manter "instalando" sem tempo limite. Rejeita só antes do instalador.
+ */
+export function installUpdate(): Promise<void> {
+  return invoke<void>("install_update");
+}
+
+/** Assina `update-available` (checagem automática). Devolve a função que cancela a assinatura. */
+export function onUpdateAvailable(callback: (info: UpdateInfo) => void): Promise<UnlistenFn> {
+  return listen<UpdateInfo>("update-available", (event) => callback(event.payload));
+}
+
+/** Assina `update-progress` durante o download. */
+export function onUpdateProgress(callback: (progress: UpdateProgress) => void): Promise<UnlistenFn> {
+  return listen<UpdateProgress>("update-progress", (event) => callback(event.payload));
 }
 
 /** Enquanto o diálogo de arquivo está aberto, o painel não se esconde por perda de foco. */

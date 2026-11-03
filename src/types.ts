@@ -85,6 +85,21 @@ export interface AppState {
   save_error: string | null;
 }
 
+/** Versão nova do Sonar (`check_for_update`, `pending_update`, evento `update-available`). */
+export interface UpdateInfo {
+  version: string;
+  /** Notas da versão em texto puro; pode vir vazio. */
+  notes: string;
+  /** Publicação em segundos desde 1970 (UTC), ou `null`. */
+  date: number | null;
+}
+
+/** Payload do evento `update-progress`. `total` é `null` quando o servidor não informa. */
+export interface UpdateProgress {
+  downloaded: number;
+  total: number | null;
+}
+
 /** Payload do evento `mic-level`. */
 export interface MicLevel {
   id: string;

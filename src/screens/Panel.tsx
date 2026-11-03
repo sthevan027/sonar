@@ -7,6 +7,7 @@ import { useAppState } from "../store";
 import { MicTab } from "./MicTab";
 import { OutputTab } from "./OutputTab";
 import { ProfileBar } from "./ProfileBar";
+import { useUpdateAvailable } from "./useUpdateAvailable";
 
 interface PanelProps {
   /** Botão "+" da barra de perfis: abre o editor de perfil novo. */
@@ -29,6 +30,7 @@ export function Panel({
   onTabChange,
 }: PanelProps) {
   const state = useAppState();
+  const updateAvailable = useUpdateAvailable();
 
   return (
     <>
@@ -63,12 +65,17 @@ export function Panel({
             onChange={(id) => onTabChange(id === "mic" ? "mic" : "output")}
           />
         </div>
-        <IconButton
-          label="Configurações"
-          icon={<Icon name="settings" size={17} />}
-          size={34}
-          onPress={onOpenSettings}
-        />
+        <span className="gear-wrap">
+          <IconButton
+            label="Configurações"
+            icon={<Icon name="settings" size={17} />}
+            size={34}
+            onPress={onOpenSettings}
+          />
+          {updateAvailable && (
+            <span className="gear-dot" role="img" aria-label="Atualização disponível" />
+          )}
+        </span>
       </div>
 
       {tab === "output" ? <OutputTab state={state} /> : <MicTab state={state} />}
