@@ -139,9 +139,12 @@ export function filterApps(apps: RunningApp[], query: string): RunningApp[] {
   );
 }
 
-/** App a partir de um caminho escolhido em "Procurar .exe". `null` se o caminho não tem nome. */
+/**
+ * App a partir de um caminho escolhido em "Procurar .exe". `null` quando o nome não termina
+ * em `.exe` (sem diferenciar maiúsculas) ou quando sobra só `.exe`, sem nome antes.
+ */
 export function appFromPath(path: string): RunningApp | null {
   const base = path.trim().split(/[\\/]/).pop() ?? "";
-  if (!base) return null;
+  if (!/\.exe$/i.test(base) || base.length <= 4) return null;
   return { exe: base.toLowerCase(), name: base.replace(/\.exe$/i, "") };
 }

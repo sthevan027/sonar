@@ -66,4 +66,39 @@ describe("ProfileBar", () => {
     });
     expect(onEdit).not.toHaveBeenCalled();
   });
+
+  it("keyboard_focus_shows_pencil_for_inactive_profile_and_edits_without_activating", () => {
+    const onEdit = vi.fn();
+    const beta: Profile = { id: "beta", icon: "music", name: "Beta", items: [] };
+    render(
+      <ProfileBar
+        profiles={[jogo, beta]}
+        lastProfile="jogo"
+        onAdd={vi.fn()}
+        onEdit={onEdit}
+      />,
+    );
+
+    // Sem foco, o lápis é do perfil ativo.
+    expect(screen.getByRole("button", { name: "Editar Jogo" })).toBeTruthy();
+
+    act(() => screen.getByRole("button", { name: "Beta" }).focus());
+    const pencil = screen.getByRole("button", { name: "Editar Beta" });
+    // O lápis é alcançável por teclado: o foco entrar nele não some com ele.
+    act(() => pencil.focus());
+    expect(screen.getByRole("button", { name: "Editar Beta" })).toBeTruthy();
+
+    fireEvent.click(pencil);
+    expect(onEdit).toHaveBeenCalledWith("beta");
+    expect(api.activateProfile).not.toHaveBeenCalled();
+  });
+
+  it("marks_the_active_profile_with_aria_pressed", () => {
+    const beta: Profile = { id: "beta", icon: "music", name: "Beta", items: [] };
+    render(
+      <ProfileBar profiles={[jogo, beta]} lastProfile="beta" onAdd={vi.fn()} onEdit={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: "Beta" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Jogo" }).getAttribute("aria-pressed")).toBe("false");
+  });
 });

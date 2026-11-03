@@ -46,8 +46,10 @@ export function AppPicker({ exclude, onPick, onCancel }: AppPickerProps) {
   function browse() {
     api.pickExecutable().then(
       (path) => {
-        const app = path === null ? null : appFromPath(path);
+        if (path === null) return;
+        const app = appFromPath(path);
         if (app) onPick(app);
+        else notify("Escolha um arquivo .exe.");
       },
       () => notify("Não foi possível abrir o seletor de arquivos."),
     );
@@ -80,7 +82,15 @@ export function AppPicker({ exclude, onPick, onCancel }: AppPickerProps) {
   }
 
   return (
-    <div className="picker">
+    <div
+      className="picker"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+    >
       <div className="picker-top">
         <input
           type="search"
@@ -88,6 +98,7 @@ export function AppPicker({ exclude, onPick, onCancel }: AppPickerProps) {
           aria-label="Buscar app"
           placeholder="Buscar app"
           autoComplete="off"
+          autoFocus
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />

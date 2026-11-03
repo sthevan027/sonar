@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "../api";
 import { IconButton } from "../components/IconButton";
 import { useToast } from "../components/Toast";
@@ -27,6 +27,9 @@ export function ProfileBar({ profiles, lastProfile, onAdd, onEdit }: ProfileBarP
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Depois de um toque longo, o clique que chega em seguida não deve ativar o perfil.
   const skipClick = useRef(false);
+  // Perfil com foco na barra (teclado): o lápis passa a editar esse, sem ativá-lo.
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const editing = profiles.find((p) => p.id === focusedId) ?? current;
 
   function cancelPress() {
     if (pressTimer.current !== null) clearTimeout(pressTimer.current);
@@ -51,10 +54,21 @@ export function ProfileBar({ profiles, lastProfile, onAdd, onEdit }: ProfileBarP
   );
 
   return (
-    <div className="prof">
+    <div
+      className="prof"
+      onFocus={(event) => {
+        const slot = (event.target as HTMLElement).closest<HTMLElement>("[data-profile-id]");
+        if (slot?.dataset.profileId) setFocusedId(slot.dataset.profileId);
+      }}
+      onBlur={(event) => {
+        // Só solta o foco quando ele sai da barra (inclusive do lápis).
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedId(null);
+      }}
+    >
       {profiles.map((profile) => (
         <span
           key={profile.id}
+          data-profile-id={profile.id}
           className="pslot"
           onPointerDown={() => startPress(profile.id)}
           onPointerUp={cancelPress}
@@ -105,13 +119,15 @@ export function ProfileBar({ profiles, lastProfile, onAdd, onEdit }: ProfileBarP
           </>
         )}
       </div>
-      {current && (
-        <IconButton
-          label={`Editar ${profileName(current)}`}
-          icon={<Icon name="pencil" size={16} />}
-          size={32}
-          onPress={() => onEdit(current.id)}
-        />
+      {editing && (
+        <span data-profile-id={editing.id}>
+          <IconButton
+            label={`Editar ${profileName(editing)}`}
+            icon={<Icon name="pencil" size={16} />}
+            size={32}
+            onPress={() => onEdit(editing.id)}
+          />
+        </span>
       )}
     </div>
   );

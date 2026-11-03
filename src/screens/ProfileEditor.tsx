@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "../api";
 import { AppLogo } from "../components/AppLogo";
 import { DeviceMenu } from "../components/DeviceMenu";
@@ -51,9 +51,24 @@ export function ProfileEditor({ profileId, onDone }: ProfileEditorProps) {
   const [picking, setPicking] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // Guarda síncrona: dois cliques antes do re-render não disparam a exclusão duas vezes.
+  const deletingRef = useRef(false);
+  const addButton = useRef<HTMLButtonElement>(null);
+  // Ao fechar o seletor, o foco volta para "Adicionar app" (Escape, Cancelar ou um app escolhido).
+  const focusAddOnClose = useRef(false);
+
+  useEffect(() => {
+    if (!picking && focusAddOnClose.current) {
+      focusAddOnClose.current = false;
+      addButton.current?.focus();
+    }
+  }, [picking]);
 
   const error = nameError(draft.name);
   const count = nameLength(draft.name);
+  // Perfil sem nome e sem apps não faz sentido: Salvar fica desativado.
+  const blank = draft.name.trim() === "" && draft.items.length === 0;
 
   function changeItem(index: number, patch: Partial<ProfileItem>) {
     setDraft((d) => ({
@@ -68,11 +83,17 @@ export function ProfileEditor({ profileId, onDone }: ProfileEditorProps) {
 
   function addFromPicker(app: RunningApp) {
     setDraft((d) => ({ ...d, items: addApp(d.items, app.exe) }));
+    focusAddOnClose.current = true;
+    setPicking(false);
+  }
+
+  function closePicker() {
+    focusAddOnClose.current = true;
     setPicking(false);
   }
 
   function save() {
-    if (error || saving) return;
+    if (error || blank || saving) return;
     setSaving(true);
     api.saveProfile(buildProfile(draft)).then(onDone, (cause: unknown) => {
       setSaving(false);
@@ -81,7 +102,12 @@ export function ProfileEditor({ profileId, onDone }: ProfileEditorProps) {
   }
 
   function remove() {
+    if (deletingRef.current) return;
+    deletingRef.current = true;
+    setDeleting(true);
     api.deleteProfile(draft.id).then(onDone, () => {
+      deletingRef.current = false;
+      setDeleting(false);
       setConfirming(false);
       notify("Não foi possível excluir o perfil.");
     });
@@ -164,10 +190,15 @@ export function ProfileEditor({ profileId, onDone }: ProfileEditorProps) {
             <AppPicker
               exclude={draft.items.map((item) => item.exe)}
               onPick={addFromPicker}
-              onCancel={() => setPicking(false)}
+              onCancel={closePicker}
             />
           ) : (
-            <button type="button" className="ed-add" onClick={() => setPicking(true)}>
+            <button
+              ref={addButton}
+              type="button"
+              className="ed-add"
+              onClick={() => setPicking(true)}
+            >
               <Icon name="plus" size={16} />
               Adicionar app
             </button>
@@ -191,7 +222,7 @@ export function ProfileEditor({ profileId, onDone }: ProfileEditorProps) {
           <div className="ed-confirm" role="group" aria-label="Confirmar exclusão">
             <span>Excluir este perfil? Os apps mantêm as rotas que ele já aplicou.</span>
             <div className="ed-confirm-actions">
-              <button type="button" className="btn danger" onClick={remove}>
+              <button type="button" className="btn danger" disabled={deleting} onClick={remove}>
                 Excluir
               </button>
               <button type="button" className="btn" onClick={() => setConfirming(false)}>
@@ -209,7 +240,7 @@ export function ProfileEditor({ profileId, onDone }: ProfileEditorProps) {
         <button
           type="button"
           className="btn pri"
-          disabled={error !== null || saving}
+          disabled={error !== null || blank || saving}
           onClick={save}
         >
           Salvar perfil

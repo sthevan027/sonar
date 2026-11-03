@@ -231,4 +231,40 @@ describe("AppPicker", () => {
     expect(within(list).queryByRole("button", { name: "Spotify" })).toBeNull();
     expect(within(list).getByRole("button", { name: "Discord" })).toBeTruthy();
   });
+
+  it("picker_autofocuses_search_and_escape_returns_focus_to_add_button", async () => {
+    fx.state = stateWith({ profiles: [] });
+    vi.mocked(api.listRunningApps).mockResolvedValueOnce(apps);
+    render(<ProfileEditor onDone={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar app" }));
+    const search = await screen.findByLabelText("Buscar app");
+    expect(document.activeElement).toBe(search);
+
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(screen.queryByLabelText("Buscar app")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Adicionar app" }));
+  });
+
+  it("save_disabled_when_name_empty_and_no_apps", () => {
+    fx.state = stateWith({ profiles: [] });
+    render(<ProfileEditor onDone={vi.fn()} />);
+    const save = screen.getByRole("button", { name: "Salvar perfil" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+
+    fireEvent.change(nameField(), { target: { value: "Jogo" } });
+    expect(save.disabled).toBe(false);
+  });
+
+  it("delete_in_flight_guard_calls_api_once", () => {
+    vi.mocked(api.deleteProfile).mockImplementationOnce(() => new Promise(() => undefined));
+    render(<ProfileEditor profileId="jogo" onDone={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Excluir perfil" }));
+
+    const confirm = screen.getByRole("button", { name: "Excluir" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    expect(api.deleteProfile).toHaveBeenCalledTimes(1);
+  });
 });

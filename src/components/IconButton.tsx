@@ -17,6 +17,7 @@ export function IconButton({ label, icon, onPress, size = 32, selected, disabled
     <button
       type="button"
       aria-label={label}
+      aria-pressed={selected}
       title={label}
       disabled={disabled}
       className={className}
