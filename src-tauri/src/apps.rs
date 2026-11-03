@@ -202,6 +202,7 @@ mod windows_impl {
     use std::mem::size_of;
     use std::path::Path;
 
+    use super::{parse_exe_request, ExeRequest};
     use windows::core::{BOOL, PCWSTR};
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
