@@ -1,7 +1,9 @@
 //! Tipos compartilhados do roteamento de áudio por app.
 
+use serde::{Deserialize, Serialize};
+
 /// Sentido do fluxo de áudio: saída (render) ou entrada (capture).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Flow {
     Render,
     Capture,
@@ -9,7 +11,7 @@ pub enum Flow {
 
 /// Id puro do endpoint de áudio, no formato que o `MMDevice` devolve
 /// (ex.: `{0.0.0.00000000}.{2329d0e9-306a-408e-9c4b-4061e553cdb4}`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceId(pub String);
 
 /// Backend que grava e lê a rota de áudio de um processo.

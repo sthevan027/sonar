@@ -1,6 +1,8 @@
 mod shell;
 #[allow(dead_code)] // Tasks seguintes consomem o roteador; até lá só os testes o usam.
 mod audio;
+#[allow(dead_code)] // Task 9 consome as regras; até lá só os testes o usam.
+mod rules;
 #[allow(dead_code)] // Task 9 consome o Store; até lá só os testes o usam.
 mod store;
 
