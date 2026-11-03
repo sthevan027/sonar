@@ -120,3 +120,42 @@ export function selectableDevices(
     (d) => d.flow === flow && d.connected && (!d.hidden || d.id === selectedId),
   );
 }
+
+/** Escolha de rota que o usuário fez e que o sistema ainda não confirmou (ver `useRoutePending`). */
+export interface PendingRoute {
+  /** Sequência da escolha: uma falha antiga não apaga uma escolha mais nova do mesmo app. */
+  id: number;
+  exe: string;
+  flow: Flow;
+  /** Dispositivo escolhido; `null` = Padrão do Windows. */
+  device: string | null;
+}
+
+/** Chave de um app num sentido: o exe em minúsculas, como o `findRule` compara. */
+export function routeKey(exe: string, flow: Flow): string {
+  return `${flow}|${exe.toLowerCase()}`;
+}
+
+/**
+ * Rota mostrada enquanto a escolha está pendente: a escolhida, sem aviso de desconectado
+ * (o aviso fala da regra salva, que ainda não foi trocada).
+ */
+export function pendingRouteInfo(
+  state: AppState,
+  flow: Flow,
+  device: string | null,
+): RouteInfo {
+  if (device === null) return { label: DEFAULT_ROUTE_LABEL, selectedId: null, warning: null };
+  const chosen = state.devices.find((d) => d.id === device && d.flow === flow);
+  return { label: chosen?.display_name ?? device, selectedId: device, warning: null };
+}
+
+/** `true` quando a regra salva já é a escolha pendente (sem regra conta como `null`). */
+export function isRouteSettled(
+  state: AppState,
+  exe: string,
+  flow: Flow,
+  device: string | null,
+): boolean {
+  return (findRule(state.rules, exe, flow)?.device ?? null) === device;
+}

@@ -13,11 +13,14 @@ import {
   attempt,
   groupSessions,
   iconNameOf,
+  pendingRouteInfo,
   routeFor,
+  routeKey,
   selectableDevices,
   toneOf,
   type AppRow,
 } from "./model";
+import { useRoutePending, type RoutePending } from "./useRoutePending";
 
 // Reexportado para a Task 12 e para os testes.
 export { groupSessions, type AppRow } from "./model";
@@ -30,6 +33,7 @@ export function OutputTab({ state }: { state: AppState }) {
   const defaultDevice = state.devices.find((d) => d.flow === "render" && d.is_default);
   const { active, silent } = groupSessions(state.sessions, "render");
   const nothingPlaying = active.length === 0 && silent.length === 0;
+  const routes = useRoutePending(state);
 
   return (
     <div className="tab-body">
@@ -94,7 +98,7 @@ export function OutputTab({ state }: { state: AppState }) {
           <p className="empty">Nenhum app tocando agora.</p>
         )}
         {active.map((row) => (
-          <AppCard key={row.key} row={row} state={state} />
+          <AppCard key={row.key} row={row} state={state} routes={routes} />
         ))}
 
         {silent.length > 0 && (
@@ -110,7 +114,9 @@ export function OutputTab({ state }: { state: AppState }) {
               <span className="cnt">{silent.length}</span>
             </button>
             {silentOpen &&
-              silent.map((row) => <AppCard key={row.key} row={row} state={state} />)}
+              silent.map((row) => (
+                <AppCard key={row.key} row={row} state={state} routes={routes} />
+              ))}
           </>
         )}
       </div>
@@ -128,10 +134,21 @@ export function OutputTab({ state }: { state: AppState }) {
   );
 }
 
-function AppCard({ row, state }: { row: AppRow; state: AppState }) {
+function AppCard({
+  row,
+  state,
+  routes,
+}: {
+  row: AppRow;
+  state: AppState;
+  routes: RoutePending;
+}) {
   const notify = useToast();
   const name = appName(row.exe);
-  const route = routeFor(state, row.exe, "render");
+  const entry = routes.pending.get(routeKey(row.exe, "render"));
+  const route = entry
+    ? pendingRouteInfo(state, "render", entry.device)
+    : routeFor(state, row.exe, "render");
   const routed = state.devices.find((d) => d.id === route.selectedId);
   const chipIcon = iconNameOf(routed);
   const status = row.active ? "tocando agora" : "em silêncio";
@@ -153,7 +170,7 @@ function AppCard({ row, state }: { row: AppRow; state: AppState }) {
           devices={selectableDevices(state.devices, "render", route.selectedId)}
           selectedId={route.selectedId}
           onSelect={(id) =>
-            attempt(api.setAppRoute(row.exe, "render", id), () =>
+            routes.choose(row.exe, "render", id, () =>
               notify(`Não foi possível mudar a saída de ${name}.`),
             )
           }

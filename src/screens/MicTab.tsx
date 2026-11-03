@@ -12,10 +12,13 @@ import {
   attempt,
   groupSessions,
   iconNameOf,
+  pendingRouteInfo,
   routeFor,
+  routeKey,
   selectableDevices,
   toneOf,
 } from "./model";
+import { useRoutePending } from "./useRoutePending";
 
 /** Segmentos do medidor, de -60 dB a 0 dB. */
 export const METER_SEGMENTS = 24;
@@ -39,6 +42,7 @@ export function MicTab({ state }: { state: AppState }) {
   const micId = mic?.id ?? null;
   const peak = useMicPeak(micId);
   const notify = useToast();
+  const routes = useRoutePending(state);
 
   const db = peakToDb(peak);
   const lit = litSegments(db);
@@ -110,7 +114,10 @@ export function MicTab({ state }: { state: AppState }) {
         )}
         {active.map((row) => {
           const name = appName(row.exe);
-          const route = routeFor(state, row.exe, "capture");
+          const entry = routes.pending.get(routeKey(row.exe, "capture"));
+          const route = entry
+            ? pendingRouteInfo(state, "capture", entry.device)
+            : routeFor(state, row.exe, "capture");
           const routed = state.devices.find((d) => d.id === route.selectedId);
           const chipIcon = iconNameOf(routed);
           return (
@@ -130,7 +137,7 @@ export function MicTab({ state }: { state: AppState }) {
                   devices={selectableDevices(state.devices, "capture", route.selectedId)}
                   selectedId={route.selectedId}
                   onSelect={(id) =>
-                    attempt(api.setAppRoute(row.exe, "capture", id), () =>
+                    routes.choose(row.exe, "capture", id, () =>
                       notify(`Não foi possível mudar o microfone de ${name}.`),
                     )
                   }

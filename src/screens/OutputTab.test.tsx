@@ -225,3 +225,88 @@ describe("OutputTab", () => {
   });
 });
 
+
+describe("OutputTab: escolha de saída com resposta imediata", () => {
+  /** Próximo `setAppRoute` fica pendente até o teste decidir. */
+  function holdNextRoute() {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    vi.mocked(api.setAppRoute).mockImplementationOnce(
+      () =>
+        new Promise<void>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        }),
+    );
+    return { resolve: () => resolve(), reject: (e: Error) => reject(e) };
+  }
+
+  function chooseFor(appChipName: string, deviceName: string) {
+    fireEvent.click(screen.getByRole("button", { name: appChipName }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: deviceName }));
+  }
+
+  it("output_tab_shows_chosen_device_before_system_answers", () => {
+    holdNextRoute();
+    renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+
+    expect(screen.getByRole("button", { name: "Caixa" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Headset" })).toBeNull();
+    expect(api.setAppRoute).toHaveBeenCalledWith("spotify.exe", "render", "c");
+  });
+
+  it("output_tab_in_flight_state_without_the_choice_does_not_revert_it", () => {
+    holdNextRoute();
+    const { rerender } = renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+
+    rerender(<ToastProvider><OutputTab state={makeState()} /></ToastProvider>);
+
+    expect(screen.getByRole("button", { name: "Caixa" })).toBeTruthy();
+  });
+
+  it("output_tab_matching_state_confirms_choice_and_later_external_change_wins", () => {
+    holdNextRoute();
+    const { rerender } = renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+
+    const confirmed = makeState({
+      rules: [
+        { exe: "spotify.exe", flow: "render", device: "c" },
+        { exe: "discord.exe", flow: "render", device: "old" },
+      ],
+    });
+    rerender(<ToastProvider><OutputTab state={confirmed} /></ToastProvider>);
+    expect(screen.getByRole("button", { name: "Caixa" })).toBeTruthy();
+
+    // A escolha já foi confirmada: uma mudança feita fora do painel aparece.
+    rerender(<ToastProvider><OutputTab state={makeState()} /></ToastProvider>);
+    expect(screen.getByRole("button", { name: "Headset" })).toBeTruthy();
+  });
+
+  it("output_tab_rejected_choice_reverts_and_shows_toast", async () => {
+    const held = holdNextRoute();
+    renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+
+    await act(async () => held.reject(new Error("falhou")));
+
+    expect(screen.getByRole("button", { name: "Headset" })).toBeTruthy();
+    expect(await screen.findByText("Não foi possível mudar a saída de Spotify.")).toBeTruthy();
+  });
+
+  it("output_tab_late_failure_of_older_choice_keeps_newer_one", async () => {
+    const first = holdNextRoute();
+    holdNextRoute();
+    renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+    // Escolhe de novo (Headset) enquanto a primeira ainda não respondeu.
+    chooseFor("Caixa", "Headset");
+    expect(screen.getByRole("button", { name: "Headset" })).toBeTruthy();
+
+    await act(async () => first.reject(new Error("falhou")));
+
+    expect(screen.getByRole("button", { name: "Headset" })).toBeTruthy();
+  });
+});
