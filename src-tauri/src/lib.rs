@@ -5,6 +5,8 @@ mod audio;
 mod rules;
 #[allow(dead_code)] // Task 9 consome o Store; até lá só os testes o usam.
 mod store;
+#[allow(dead_code)] // Task 9 consome o perfil; até lá só os testes o usam.
+mod profiles;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
