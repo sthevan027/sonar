@@ -1,34 +1,37 @@
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import "./styles/base.css";
-import { Card } from "./components/Card";
-import { Chip } from "./components/Chip";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { retryAppState, useAppState } from "./store";
+import { Panel } from "./screens/Panel";
+import { retryAppState } from "./store";
 
-// Esqueleto da fundação: mostra o título e a saída padrão, lidas do estado do app.
+/**
+ * Telas do app. Cada tela nova entra como outro nome aqui e um `case` em `Screen`:
+ * a Task 12 acrescenta o editor de perfil; as próximas, dispositivos e configurações.
+ */
+export type Route = { name: "panel" };
+
+const noop = () => undefined;
+
 export default function App() {
+  // Sem setter por enquanto: só existe o painel. Quem trocar de tela ganha o `setRoute` aqui.
+  const [route] = useState<Route>({ name: "panel" });
   return (
     <main className="win">
       <ErrorBoundary onReset={retryAppState}>
         <Suspense fallback={null}>
-          <Home />
+          <Screen route={route} />
         </Suspense>
       </ErrorBoundary>
     </main>
   );
 }
 
-function Home() {
-  const state = useAppState();
-  const output = state.devices.find((d) => d.flow === "render" && d.is_default);
-
-  return (
-    <>
-      <h1 className="title">Sonar</h1>
-      <Card>
-        <span className="lbl">Saída padrão</span>
-        <Chip kind="device" tone="brass" label={output?.display_name ?? "Nenhuma saída"} />
-      </Card>
-    </>
-  );
+function Screen({ route }: { route: Route }) {
+  switch (route.name) {
+    case "panel":
+      // "+" do perfil ainda não abre nada: a Task 12 liga o editor.
+      return <Panel onAddProfile={noop} />;
+    default:
+      return null;
+  }
 }

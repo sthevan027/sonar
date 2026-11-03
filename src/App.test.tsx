@@ -46,12 +46,12 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
     expect(await screen.findByText("Caixa")).toBeTruthy();
-    expect(screen.getByText("Sonar")).toBeTruthy();
+    expect(screen.getByText("Saída padrão")).toBeTruthy();
   });
 
-  it("renderiza o nome Sonar e a saída padrão", async () => {
+  it("renderiza a saída padrão no painel", async () => {
     render(<App />);
     expect(await screen.findByText("Caixa")).toBeTruthy();
-    expect(screen.getByText("Sonar")).toBeTruthy();
+    expect(screen.getByText("Saída padrão")).toBeTruthy();
   });
 });

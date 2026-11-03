@@ -364,3 +364,325 @@ button:focus-visible {
   font-weight: 600;
   font-size: 13px;
 }
+
+/* ---- Painel (Tasks 11): perfis, abas, listas de apps. Medidas de docs/mockups/A.html e A2.html. ---- */
+
+.tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.row > .ic {
+  color: var(--mute);
+}
+
+.slider-row > .ic {
+  color: var(--mute);
+}
+
+.who {
+  flex: 1;
+  min-width: 0;
+}
+
+.who .lbl {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.who b {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.who .o {
+  display: block;
+  font-size: 12px;
+  color: var(--mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cnt {
+  font-size: 12px;
+  color: var(--mute);
+  display: inline-flex;
+  align-items: center;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 0 3px rgba(143, 191, 122, 0.18);
+  display: inline-block;
+  margin-right: 4px;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.app-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.empty {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--mute);
+  padding: 6px 2px;
+}
+
+.silent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mute);
+  flex: none;
+}
+
+.silent-toggle .cnt {
+  margin-left: auto;
+}
+
+.foot {
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--mute);
+  border-top: 1px solid var(--line);
+  padding-top: 11px;
+}
+
+.foot .ic {
+  color: var(--mute);
+}
+
+/* Abas de dispositivo (saída padrão): segmentos pequenos com só o ícone. */
+.tabs-sm {
+  padding: 3px;
+  gap: 3px;
+  flex: none;
+}
+
+.tab-icon {
+  flex: none;
+  width: 38px;
+  height: 30px;
+}
+
+/* Barra de perfis. */
+.prof {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.ibtn.sel {
+  color: var(--brass);
+}
+
+.pslot.add .ibtn {
+  border-style: dashed;
+  background: transparent;
+}
+
+.pname {
+  margin-left: auto;
+  text-align: right;
+  min-width: 0;
+}
+
+.pname b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pname span {
+  display: block;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+/* Avisos do painel (roteamento indisponível, falha de gravação). */
+.banner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid;
+  font-size: 12px;
+  line-height: 1.4;
+  flex: none;
+}
+
+.banner.warn {
+  color: var(--brass);
+  border-color: var(--brass-line);
+  background: var(--brass-wash);
+}
+
+.banner.error {
+  color: var(--danger);
+  border-color: var(--danger-line);
+  background: var(--danger-wash);
+}
+
+.banner small {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  color: var(--mute);
+  overflow-wrap: anywhere;
+}
+
+/* Medidor do microfone: 24 segmentos. */
+.meter {
+  display: flex;
+  gap: 3px;
+  flex: 1;
+}
+
+.meter i {
+  flex: 1;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--line);
+  display: block;
+}
+
+.meter i.l {
+  background: var(--live);
+}
+
+.meter-db {
+  width: 52px;
+  justify-content: flex-end;
+}
+
+/* Ícone do dispositivo padrão do microfone. */
+.tile {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border: 1px solid;
+}
+
+.tile.hs {
+  background: var(--brass-wash);
+  border-color: var(--brass-line);
+  color: var(--brass);
+}
+
+.tile.sg {
+  background: var(--sage-wash);
+  border-color: var(--sage-line);
+  color: var(--sage);
+}
+
+/* Botão de silenciar o microfone. Ligado = verde; silenciado = apagado. */
+.mute {
+  width: 100%;
+  height: 44px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--live);
+  background: rgba(143, 191, 122, 0.12);
+  border: 1px solid rgba(143, 191, 122, 0.45);
+}
+
+.mute.off {
+  color: var(--mute);
+  background: var(--card);
+  border-color: var(--line);
+}
+
+/* Menu de dispositivo (abre a partir do chip). */
+.dmenu {
+  position: relative;
+  flex: none;
+}
+
+.dmenu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  min-width: 200px;
+  max-width: 260px;
+  list-style: none;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+
+.dmenu-item {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.dmenu-item span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dmenu-item:hover {
+  background: var(--line);
+}
+
+.dmenu-item.on {
+  color: var(--brass);
+}

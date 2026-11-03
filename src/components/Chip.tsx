@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { Icon } from "./Icon";
 
 interface ChipProps {
@@ -9,9 +9,13 @@ interface ChipProps {
   onPress?: () => void;
   /** Substitui o ícone padrão do `kind` (alto-falante para dispositivo, microfone para mic). */
   icon?: ReactNode;
+  /** Estado do menu que o chip abre (`aria-expanded`). Só vale com `onPress`. */
+  expanded?: boolean;
+  /** Referência ao botão, para devolver o foco ao fechar o menu. */
+  ref?: Ref<HTMLButtonElement>;
 }
 
-export function Chip({ kind, tone, label, onPress, icon }: ChipProps) {
+export function Chip({ kind, tone, label, onPress, icon, expanded, ref }: ChipProps) {
   const className = `chip ${tone === "brass" ? "hs" : "sp"}`;
   const body = (
     <>
@@ -30,10 +34,12 @@ export function Chip({ kind, tone, label, onPress, icon }: ChipProps) {
   }
   return (
     <button
+      ref={ref}
       type="button"
       className={className}
       data-kind={kind}
       aria-haspopup="menu"
+      aria-expanded={expanded}
       onClick={onPress}
     >
       {body}

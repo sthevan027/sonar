@@ -18,6 +18,10 @@
   --brass-ring: rgba(217, 164, 65, 0.18);
   --sage-line: rgba(134, 169, 184, 0.45);
   --sage-wash: rgba(134, 169, 184, 0.08);
+  /* Aviso de erro (gravação falhou). Não é cor de marca: só sinaliza problema. */
+  --danger: #e0856f;
+  --danger-line: rgba(224, 133, 111, 0.45);
+  --danger-wash: rgba(224, 133, 111, 0.08);
 
   --font-display: "Bricolage Grotesque", sans-serif;
   --font-text: "DM Sans", sans-serif;
