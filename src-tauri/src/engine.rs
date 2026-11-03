@@ -33,10 +33,7 @@ struct Inner {
 pub struct Engine {
     source: Arc<dyn AudioSource>,
     backend: Arc<dyn RouteBackend>,
-    // Usados pelos comandos de volume e de padrão (Task 9b).
-    #[allow(dead_code)]
     ctl: Arc<dyn EndpointControl>,
-    #[allow(dead_code)]
     defaults: Arc<dyn DefaultDevice>,
     store: Store,
     notify: Arc<dyn Fn(&AppState) + Send + Sync>,
@@ -85,7 +82,7 @@ impl Engine {
             let mut guard = self.lock();
             let inner = &mut *guard;
             self.sync(inner);
-            build_state(inner)
+            build_state(inner, self.ctl.as_ref())
         };
         (self.notify)(&state);
     }
@@ -111,7 +108,7 @@ impl Engine {
                 clear_sessions(self.backend.as_ref(), &inner.sessions, &exe, flow);
                 self.reread_sessions(inner);
             }
-            build_state(inner)
+            build_state(inner, self.ctl.as_ref())
         };
         (self.notify)(&state);
     }
@@ -141,7 +138,7 @@ impl Engine {
                 self.reread_sessions(inner);
             }
             inner.last_profile = Some(id.to_string());
-            build_state(inner)
+            build_state(inner, self.ctl.as_ref())
         };
         (self.notify)(&state);
         true
@@ -159,7 +156,7 @@ impl Engine {
                 None => inner.profiles.push(p),
             }
             persist(&self.store, &mut inner.save_error, "profiles", &inner.profiles);
-            build_state(inner)
+            build_state(inner, self.ctl.as_ref())
         };
         (self.notify)(&state);
         Ok(())
@@ -174,7 +171,7 @@ impl Engine {
                 inner.last_profile = None;
             }
             persist(&self.store, &mut inner.save_error, "profiles", &inner.profiles);
-            build_state(inner)
+            build_state(inner, self.ctl.as_ref())
         };
         (self.notify)(&state);
     }
@@ -203,7 +200,7 @@ impl Engine {
                 inner.meta.remove(&id.0);
             }
             persist(&self.store, &mut inner.save_error, "devices", &inner.meta);
-            build_state(inner)
+            build_state(inner, self.ctl.as_ref())
         };
         (self.notify)(&state);
         Ok(())
@@ -219,14 +216,62 @@ impl Engine {
             let inner = &mut *guard;
             inner.settings = s;
             persist(&self.store, &mut inner.save_error, "settings", &inner.settings);
-            build_state(inner)
+            build_state(inner, self.ctl.as_ref())
         };
         (self.notify)(&state);
     }
 
-    /// Snapshot do estado atual, sem reler o sistema.
+    /// Snapshot do estado atual. Relê só volume e mudo dos dispositivos conectados.
     pub fn state(&self) -> AppState {
-        build_state(&self.lock())
+        build_state(&self.lock(), self.ctl.as_ref())
+    }
+
+    /// Volume de um app no sentido. Grava no sistema e, se der certo, avisa a interface.
+    pub fn set_session_volume(&self, pid: u32, flow: Flow, v: f32) -> Result<(), AudioError> {
+        self.ctl.set_session_volume(pid, flow, v)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Mudo de um app no sentido. Mesmo fluxo de `set_session_volume`.
+    pub fn set_session_muted(&self, pid: u32, flow: Flow, m: bool) -> Result<(), AudioError> {
+        self.ctl.set_session_muted(pid, flow, m)?;
+        self.refresh();
+        Ok(())
+    }
+
+    pub fn set_device_volume(&self, id: &DeviceId, v: f32) -> Result<(), AudioError> {
+        self.ctl.set_volume(id, v)?;
+        self.refresh();
+        Ok(())
+    }
+
+    pub fn set_device_muted(&self, id: &DeviceId, m: bool) -> Result<(), AudioError> {
+        self.ctl.set_muted(id, m)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Troca o padrão do Windows no sentido.
+    pub fn set_default_device(&self, id: &DeviceId, flow: Flow) -> Result<(), AudioError> {
+        self.defaults.set_default(id, flow)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Pico atual do endpoint para o medidor. Não avisa a interface (roda ~15 vezes por
+    /// segundo). Erro de leitura vira `0.0`: o medidor fica parado.
+    pub fn mic_peak(&self, id: &DeviceId) -> f32 {
+        self.ctl.peak(id).unwrap_or(0.0)
+    }
+
+    /// Microfone padrão conectado, do último sincronismo. Não toca no sistema.
+    pub fn default_capture(&self) -> Option<DeviceId> {
+        self.lock()
+            .devices
+            .iter()
+            .find(|d| d.flow == Flow::Capture && d.is_default && d.connected)
+            .map(|d| d.id.clone())
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -334,7 +379,7 @@ fn has_empty_device(target: &Target) -> bool {
 /// Monta o snapshot para a interface. Um dispositivo aparece se estiver conectado, se
 /// alguma regra apontar para ele ou se tiver metadado; o resto (Windows lembra de
 /// muitos dispositivos antigos) fica de fora.
-fn build_state(inner: &Inner) -> AppState {
+fn build_state(inner: &Inner, ctl: &dyn EndpointControl) -> AppState {
     let devices = inner
         .devices
         .iter()
@@ -345,6 +390,15 @@ fn build_state(inner: &Inner) -> AppState {
                 return None;
             }
             let meta = inner.meta.get(&d.id.0).cloned().unwrap_or_default();
+            // Endpoint desconectado não tem volume para ler: mostra o padrão.
+            let (volume, muted) = if d.connected {
+                (
+                    ctl.volume(&d.id).unwrap_or(1.0),
+                    ctl.muted(&d.id).unwrap_or(false),
+                )
+            } else {
+                (1.0, false)
+            };
             Some(DeviceView {
                 id: d.id.clone(),
                 flow: d.flow,
@@ -356,6 +410,8 @@ fn build_state(inner: &Inner) -> AppState {
                 connected: d.connected,
                 is_default: d.is_default,
                 has_rules,
+                volume,
+                muted,
             })
         })
         .collect();
@@ -492,36 +548,112 @@ mod tests {
         }
     }
 
-    struct FakeCtl;
+    /// Chamada gravada no `EndpointControl` falso.
+    #[derive(Debug, Clone, PartialEq)]
+    enum CtlCall {
+        SetVolume(String, f32),
+        SetMuted(String, bool),
+        SetSessionVolume(u32, Flow, f32),
+        SetSessionMuted(u32, Flow, bool),
+    }
 
-    impl EndpointControl for FakeCtl {
-        fn volume(&self, _id: &DeviceId) -> Result<f32, AudioError> {
-            Ok(1.0)
+    /// Controle de endpoints falso: grava as escritas e devolve os valores preparados
+    /// pelo teste (padrão: volume 1.0, sem mudo, pico 0.0).
+    #[derive(Default)]
+    struct FakeCtl {
+        volumes: Mutex<HashMap<String, f32>>,
+        mutes: Mutex<HashMap<String, bool>>,
+        peaks: Mutex<HashMap<String, f32>>,
+        calls: Mutex<Vec<CtlCall>>,
+        /// Leituras (volume, mudo, pico) falham quando verdadeiro.
+        fail_reads: AtomicBool,
+        /// Escritas falham quando verdadeiro; a chamada continua gravada.
+        fail_writes: AtomicBool,
+    }
+
+    impl FakeCtl {
+        fn calls(&self) -> Vec<CtlCall> {
+            self.calls.lock().unwrap().clone()
         }
-        fn set_volume(&self, _id: &DeviceId, _v: f32) -> Result<(), AudioError> {
+
+        fn set_volume_of(&self, id: &str, v: f32) {
+            self.volumes.lock().unwrap().insert(id.to_string(), v);
+        }
+
+        fn set_mute_of(&self, id: &str, m: bool) {
+            self.mutes.lock().unwrap().insert(id.to_string(), m);
+        }
+
+        fn set_peak_of(&self, id: &str, p: f32) {
+            self.peaks.lock().unwrap().insert(id.to_string(), p);
+        }
+
+        fn record(&self, call: CtlCall) -> Result<(), AudioError> {
+            self.calls.lock().unwrap().push(call);
+            if self.fail_writes.load(Ordering::SeqCst) {
+                return Err(AudioError::Os(-3));
+            }
             Ok(())
         }
-        fn muted(&self, _id: &DeviceId) -> Result<bool, AudioError> {
-            Ok(false)
-        }
-        fn set_muted(&self, _id: &DeviceId, _m: bool) -> Result<(), AudioError> {
-            Ok(())
-        }
-        fn peak(&self, _id: &DeviceId) -> Result<f32, AudioError> {
-            Ok(0.0)
-        }
-        fn set_session_volume(&self, _pid: u32, _flow: Flow, _v: f32) -> Result<(), AudioError> {
-            Ok(())
-        }
-        fn set_session_muted(&self, _pid: u32, _flow: Flow, _m: bool) -> Result<(), AudioError> {
+
+        fn read_guard(&self) -> Result<(), AudioError> {
+            if self.fail_reads.load(Ordering::SeqCst) {
+                return Err(AudioError::Os(-2));
+            }
             Ok(())
         }
     }
 
-    struct FakeDefaults;
+    impl EndpointControl for FakeCtl {
+        fn volume(&self, id: &DeviceId) -> Result<f32, AudioError> {
+            self.read_guard()?;
+            Ok(self.volumes.lock().unwrap().get(&id.0).copied().unwrap_or(1.0))
+        }
+        fn set_volume(&self, id: &DeviceId, v: f32) -> Result<(), AudioError> {
+            self.record(CtlCall::SetVolume(id.0.clone(), v))?;
+            self.volumes.lock().unwrap().insert(id.0.clone(), v);
+            Ok(())
+        }
+        fn muted(&self, id: &DeviceId) -> Result<bool, AudioError> {
+            self.read_guard()?;
+            Ok(self.mutes.lock().unwrap().get(&id.0).copied().unwrap_or(false))
+        }
+        fn set_muted(&self, id: &DeviceId, m: bool) -> Result<(), AudioError> {
+            self.record(CtlCall::SetMuted(id.0.clone(), m))?;
+            self.mutes.lock().unwrap().insert(id.0.clone(), m);
+            Ok(())
+        }
+        fn peak(&self, id: &DeviceId) -> Result<f32, AudioError> {
+            self.read_guard()?;
+            Ok(self.peaks.lock().unwrap().get(&id.0).copied().unwrap_or(0.0))
+        }
+        fn set_session_volume(&self, pid: u32, flow: Flow, v: f32) -> Result<(), AudioError> {
+            self.record(CtlCall::SetSessionVolume(pid, flow, v))
+        }
+        fn set_session_muted(&self, pid: u32, flow: Flow, m: bool) -> Result<(), AudioError> {
+            self.record(CtlCall::SetSessionMuted(pid, flow, m))
+        }
+    }
+
+    /// Troca de padrão falsa: grava cada pedido; `fail` faz a troca falhar.
+    #[derive(Default)]
+    struct FakeDefaults {
+        calls: Mutex<Vec<(DeviceId, Flow)>>,
+        fail: AtomicBool,
+    }
+
+    impl FakeDefaults {
+        fn calls(&self) -> Vec<(DeviceId, Flow)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
 
     impl DefaultDevice for FakeDefaults {
-        fn set_default(&self, _id: &DeviceId, _flow: Flow) -> Result<(), AudioError> {
+        fn set_default(&self, id: &DeviceId, flow: Flow) -> Result<(), AudioError> {
+            self.calls.lock().unwrap().push((id.clone(), flow));
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(AudioError::Os(-4));
+            }
             Ok(())
         }
     }
@@ -532,6 +664,8 @@ mod tests {
     struct World {
         source: Arc<FakeSource>,
         backend: Arc<FakeBackend>,
+        ctl: Arc<FakeCtl>,
+        defaults: Arc<FakeDefaults>,
         notes: Arc<AtomicUsize>,
     }
 
@@ -543,6 +677,8 @@ mod tests {
             World {
                 source,
                 backend,
+                ctl: Arc::new(FakeCtl::default()),
+                defaults: Arc::new(FakeDefaults::default()),
                 notes: Arc::new(AtomicUsize::new(0)),
             }
         }
@@ -552,8 +688,8 @@ mod tests {
             Engine::new(
                 self.source.clone(),
                 self.backend.clone(),
-                Arc::new(FakeCtl),
-                Arc::new(FakeDefaults),
+                self.ctl.clone(),
+                self.defaults.clone(),
                 Store::open(dir.to_path_buf()),
                 Arc::new(move |_state: &AppState| {
                     notes.fetch_add(1, Ordering::SeqCst);
@@ -1069,6 +1205,8 @@ mod tests {
                 connected: true,
                 is_default: true,
                 has_rules: true,
+                volume: 0.75,
+                muted: true,
             }],
             sessions: vec![session(10, "chrome.exe", Flow::Render, "fone")],
             rules: vec![rule("chrome.exe", Flow::Render, "fone")],
@@ -1114,12 +1252,16 @@ mod tests {
                 "icon",
                 "id",
                 "is_default",
+                "muted",
                 "name",
+                "volume",
                 "windows_name",
             ]
         );
         assert_eq!(device_json["flow"], "render");
         assert_eq!(device_json["display_name"], "Monitor");
+        assert_eq!(device_json["volume"], 0.75);
+        assert_eq!(device_json["muted"], true);
 
         let session_json = &json["sessions"][0];
         assert_eq!(
@@ -1138,6 +1280,210 @@ mod tests {
             serde_json::to_value(&with_error).unwrap()["save_error"],
             "falhou"
         );
+    }
+
+    #[test]
+    fn set_session_volume_forwards_to_ctl_and_notifies() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let before = world.notes();
+
+        engine.set_session_volume(10, Flow::Render, 0.4).unwrap();
+
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetSessionVolume(10, Flow::Render, 0.4)]
+        );
+        assert_eq!(world.notes(), before + 1);
+    }
+
+    #[test]
+    fn set_session_muted_forwards_to_ctl_and_notifies() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let before = world.notes();
+
+        engine.set_session_muted(11, Flow::Capture, true).unwrap();
+
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetSessionMuted(11, Flow::Capture, true)]
+        );
+        assert_eq!(world.notes(), before + 1);
+    }
+
+    #[test]
+    fn set_device_volume_forwards_and_shows_new_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        engine.refresh();
+        let before = world.notes();
+
+        engine.set_device_volume(&dev_id("fone"), 0.3).unwrap();
+
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetVolume("fone".to_string(), 0.3)]
+        );
+        assert_eq!(engine.state().devices[0].volume, 0.3);
+        assert_eq!(world.notes(), before + 1);
+    }
+
+    #[test]
+    fn set_device_muted_forwards_and_shows_new_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        engine.refresh();
+        let before = world.notes();
+
+        engine.set_device_muted(&dev_id("fone"), true).unwrap();
+
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetMuted("fone".to_string(), true)]
+        );
+        assert!(engine.state().devices[0].muted);
+        assert_eq!(world.notes(), before + 1);
+    }
+
+    #[test]
+    fn set_default_device_forwards_and_notifies() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let before = world.notes();
+
+        engine
+            .set_default_device(&dev_id("mic"), Flow::Capture)
+            .unwrap();
+
+        assert_eq!(
+            world.defaults.calls(),
+            vec![(dev_id("mic"), Flow::Capture)]
+        );
+        assert_eq!(world.notes(), before + 1);
+    }
+
+    #[test]
+    fn failed_endpoint_write_is_returned_and_does_not_notify() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.ctl.fail_writes.store(true, Ordering::SeqCst);
+        world.defaults.fail.store(true, Ordering::SeqCst);
+        let before = world.notes();
+
+        assert!(engine.set_session_volume(10, Flow::Render, 0.4).is_err());
+        assert!(engine.set_device_muted(&dev_id("fone"), true).is_err());
+        assert!(engine
+            .set_default_device(&dev_id("fone"), Flow::Render)
+            .is_err());
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn mic_peak_reads_ctl_without_notifying() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.ctl.set_peak_of("mic", 0.42);
+        let before = world.notes();
+
+        assert_eq!(engine.mic_peak(&dev_id("mic")), 0.42);
+        assert_eq!(world.notes(), before);
+
+        // Leitura que falha vira 0.0: o medidor fica parado, sem erro.
+        world.ctl.fail_reads.store(true, Ordering::SeqCst);
+        assert_eq!(engine.mic_peak(&dev_id("mic")), 0.0);
+    }
+
+    #[test]
+    fn device_view_shows_volume_and_mute_only_for_connected_devices() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![
+            device("fone", Flow::Render, true, "Fone"),
+            device("antigo", Flow::Render, false, "Antigo"),
+        ]);
+        world.ctl.set_volume_of("fone", 0.25);
+        world.ctl.set_mute_of("fone", true);
+        // Desconectado: mesmo que o controle tivesse valores, a visão mostra o padrão.
+        world.ctl.set_volume_of("antigo", 0.2);
+        world.ctl.set_mute_of("antigo", true);
+        engine.refresh();
+        engine
+            .update_device_meta(&dev_id("antigo"), "Nome", None, false)
+            .unwrap();
+
+        let state = engine.state();
+        let fone = state.devices.iter().find(|d| d.id.0 == "fone").unwrap();
+        assert_eq!(fone.volume, 0.25);
+        assert!(fone.muted);
+        let antigo = state.devices.iter().find(|d| d.id.0 == "antigo").unwrap();
+        assert_eq!(antigo.volume, 1.0);
+        assert!(!antigo.muted);
+    }
+
+    #[test]
+    fn device_view_falls_back_to_defaults_when_ctl_read_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world.ctl.set_volume_of("fone", 0.25);
+        world.ctl.set_mute_of("fone", true);
+        world.ctl.fail_reads.store(true, Ordering::SeqCst);
+
+        engine.refresh();
+
+        let fone = &engine.state().devices[0];
+        assert_eq!(fone.volume, 1.0);
+        assert!(!fone.muted);
+    }
+
+    #[test]
+    fn default_capture_is_the_connected_default_microphone() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let mic = Device {
+            is_default: true,
+            ..device("mic", Flow::Capture, true, "Microfone")
+        };
+        world.source.set_devices(vec![
+            Device {
+                is_default: false,
+                ..device("outro", Flow::Capture, true, "Outro")
+            },
+            mic.clone(),
+            Device {
+                is_default: true,
+                ..device("fone", Flow::Render, true, "Fone")
+            },
+        ]);
+        engine.refresh();
+        assert_eq!(engine.default_capture(), Some(dev_id("mic")));
+
+        // Padrão desconectado não conta: não há microfone padrão ativo.
+        world.source.set_devices(vec![Device {
+            connected: false,
+            ..mic
+        }]);
+        engine.refresh();
+        assert_eq!(engine.default_capture(), None);
     }
 
     #[test]

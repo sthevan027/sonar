@@ -41,7 +41,8 @@ impl DeviceMeta {
 }
 
 /// Dispositivo como a interface o vê: endpoint do Windows junto com o metadado.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// `f32` impede `Eq`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DeviceView {
     pub id: DeviceId,
     pub flow: Flow,
@@ -57,6 +58,10 @@ pub struct DeviceView {
     pub is_default: bool,
     /// Alguma regra aponta para este dispositivo.
     pub has_rules: bool,
+    /// Volume mestre do endpoint, de 0.0 a 1.0. `1.0` quando desconectado ou sem leitura.
+    pub volume: f32,
+    /// Mudo do endpoint. `false` quando desconectado ou sem leitura.
+    pub muted: bool,
 }
 
 /// Snapshot completo para a interface.
