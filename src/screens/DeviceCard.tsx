@@ -27,6 +27,12 @@ function enqueue(call: () => Promise<void>, onFail: () => void) {
   metaQueue = metaQueue.then(call).then(undefined, onFail);
 }
 
+/** Classe da linha de estado: verde no texto só quando conectado e visível; bolinha verde quando conectado. */
+function statusClass(device: DeviceView): string {
+  if (!device.connected) return "st";
+  return device.hidden ? "st conn" : "st conn live";
+}
+
 interface DeviceCardProps {
   device: DeviceView;
   /** Cartão em edição: aparecem nome, ícone e restaurar. */
@@ -62,7 +68,7 @@ export function DeviceCard({ device, editing, onToggleEdit, footer }: DeviceCard
         <div className="who">
           <b>{name}</b>
           <span className="o">{device.windows_name}</span>
-          <div className={device.connected ? "st live" : "st"}>
+          <div className={statusClass(device)}>
             <i aria-hidden="true" />
             {statusLine(device)}
           </div>

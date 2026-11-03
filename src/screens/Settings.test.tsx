@@ -79,6 +79,14 @@ describe("Settings", () => {
     );
   });
 
+  it("restore_default_shortcut_link_saves_super_alt_v", async () => {
+    setup(settings({ shortcut: "Ctrl+K" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Restaurar atalho padrão (Win Alt V)" }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenCalledWith({ shortcut: "Super+Alt+V", autostart: false }),
+    );
+  });
+
   it("shows_toast_when_save_settings_fails", async () => {
     setup();
     vi.mocked(api.saveSettings).mockRejectedValueOnce(new Error("disco cheio"));

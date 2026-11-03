@@ -1031,6 +1031,7 @@ button:focus-visible {
   color: var(--mute);
 }
 
+/* Conectado oculto: bolinha verde, texto apagado. Conectado visível: texto e bolinha verdes. */
 .st.live {
   color: var(--live);
 }
@@ -1039,9 +1040,20 @@ button:focus-visible {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: currentColor;
+  background: var(--mute);
   display: block;
   flex: none;
+}
+
+.st.conn i {
+  background: var(--live);
+}
+
+/* Ícone de dispositivo desconectado ou oculto: apagado, como em D.html. */
+.tile.nt {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--mute);
 }
 
 .act {

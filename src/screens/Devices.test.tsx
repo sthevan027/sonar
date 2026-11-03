@@ -161,6 +161,17 @@ describe("Devices", () => {
     expect(screen.getByText("Desconectado")).toBeTruthy();
   });
 
+  it("trocar_padrao_calls_set_default_device_with_tab_flow", async () => {
+    setDevices([
+      device({ id: "caixa", display_name: "Caixa", is_default: true }),
+      device({ id: "h", display_name: "Fone" }),
+    ]);
+    renderDevices();
+    fireEvent.click(screen.getByRole("button", { name: "Trocar" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Fone" }));
+    await waitFor(() => expect(api.setDefaultDevice).toHaveBeenCalledWith("h", "render"));
+  });
+
   it("mic_meter_unlistens_on_unmount", async () => {
     const unlisten = vi.fn();
     vi.mocked(api.onMicLevel).mockResolvedValueOnce(unlisten);
