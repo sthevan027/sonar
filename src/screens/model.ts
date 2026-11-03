@@ -17,6 +17,8 @@ export interface AppRow {
   active: boolean;
   /** Volume (0.0 a 1.0) da sessão que representa o app: a primeira ativa, ou a primeira. */
   volume: number;
+  /** Todas as sessões do app estão silenciadas. */
+  muted: boolean;
 }
 
 /** Agrupa as sessões de um fluxo (padrão: saída) em linhas, separando as ativas das silenciosas. */
@@ -41,6 +43,7 @@ export function groupSessions(
       pids: Array.from(new Set(list.map((s) => s.pid))),
       active: list.some((s) => s.active),
       volume: representative.volume,
+      muted: list.every((s) => s.muted),
     };
   }).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 

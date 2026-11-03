@@ -223,6 +223,47 @@ button:focus-visible {
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
+  pointer-events: none; /* o arrasto é do trilho; o input fica para teclado e leitor de tela */
+}
+
+.track {
+  touch-action: none;
+  cursor: pointer;
+}
+.track::before {
+  /* Área de toque mais alta que o trilho de 6px. */
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -10px;
+  bottom: -10px;
+}
+
+/* Ícone de som que também silencia (clique = mudo / som). */
+.mute-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: -4px;
+  border-radius: 8px;
+  color: var(--mute);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  flex: none;
+}
+.mute-btn:hover {
+  color: var(--text);
+  background: var(--card);
+}
+.mute-btn[aria-pressed="true"] {
+  color: var(--brass);
+}
+.mute-btn:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 1px;
 }
 
 /* Polegar sem tamanho: o ponteiro mapeia para a largura inteira, como a bolinha `u`. */

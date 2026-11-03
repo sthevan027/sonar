@@ -31,6 +31,7 @@ import {
   Tv,
   Video,
   Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -65,6 +66,7 @@ export const iconMap = {
   layers: Layers,
   "audio-lines": AudioLines,
   "volume-2": Volume2,
+  "volume-x": VolumeX,
   check: Check,
 } satisfies Record<string, LucideIcon>;
 

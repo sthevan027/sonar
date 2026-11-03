@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { PointerEvent, ReactNode } from "react";
 
 /** Limita a 0..100. NaN vira 0 (não deixa a barra sair do trilho). */
 export function clampPercent(value: number): number {
@@ -23,10 +23,30 @@ interface SliderProps {
  */
 export function Slider({ value, onChange, tone = "text", icon, label }: SliderProps) {
   const v = Math.round(clampPercent(value));
+
+  // Clicar, segurar e arrastar: o ponteiro fica "capturado" pelo trilho até soltar.
+  function percentAt(event: PointerEvent<HTMLDivElement>): number {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0) return v;
+    return Math.round(clampPercent(((event.clientX - rect.left) / rect.width) * 100));
+  }
+  function onPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    onChange(percentAt(event));
+  }
+  function onPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) onChange(percentAt(event));
+  }
+
   return (
     <div className="row slider-row">
       {icon}
-      <div className={tone === "brass" ? "track br" : "track"}>
+      <div
+        className={tone === "brass" ? "track br" : "track"}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+      >
         <i style={{ width: `${v}%` }} />
         <u style={{ left: `${v}%` }} />
         <input

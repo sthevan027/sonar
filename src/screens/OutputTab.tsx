@@ -4,6 +4,7 @@ import { AppLogo } from "../components/AppLogo";
 import { Card } from "../components/Card";
 import { DeviceMenu } from "../components/DeviceMenu";
 import { Icon } from "../components/Icon";
+import { MuteButton } from "../components/MuteButton";
 import { useToast } from "../components/Toast";
 import { VolumeSlider } from "../components/VolumeSlider";
 import type { AppState } from "../types";
@@ -74,7 +75,17 @@ export function OutputTab({ state }: { state: AppState }) {
           <VolumeSlider
             label="Volume da saída padrão"
             tone="brass"
-            icon={<Icon name="volume-2" size={18} />}
+            icon={
+              <MuteButton
+                muted={defaultDevice.muted}
+                name="a saída padrão"
+                onToggle={() =>
+                  attempt(api.setDeviceMuted(defaultDevice.id, !defaultDevice.muted), () =>
+                    notify("Não foi possível silenciar a saída."),
+                  )
+                }
+              />
+            }
             value={defaultDevice.volume}
             onCommit={(value) => api.setDeviceVolume(defaultDevice.id, value)}
           />
@@ -178,7 +189,20 @@ function AppCard({
       </div>
       <VolumeSlider
         label={`Volume do ${name}`}
-        icon={<Icon name="volume-2" size={18} />}
+        icon={
+          <MuteButton
+            muted={row.muted}
+            name={name}
+            onToggle={async () => {
+              const results = await Promise.allSettled(
+                row.pids.map((pid) => api.setSessionMuted(pid, "render", !row.muted)),
+              );
+              if (results.length > 0 && results.every((r) => r.status === "rejected")) {
+                notify(`Não foi possível silenciar ${name}.`);
+              }
+            }}
+          />
+        }
         value={row.volume}
         onCommit={async (value) => {
           // Um PID que já fechou falha sem motivo: só é erro se todos falharem.
