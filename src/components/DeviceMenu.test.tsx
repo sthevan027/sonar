@@ -189,3 +189,47 @@ describe("DeviceMenu", () => {
     );
   });
 });
+
+describe("DeviceMenu guard and clamp", () => {
+  it("device_menu_pointercancel_releases_pointer_guard", () => {
+    renderMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Caixa" }));
+    const menu = screen.getByRole("menu");
+    const item = screen.getByRole("menuitemradio", { name: "Caixa" });
+
+    fireEvent.pointerDown(menu);
+    document.dispatchEvent(new Event("pointercancel"));
+    fireEvent.focusOut(item, { relatedTarget: null });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("device_menu_close_resets_pointer_guard", () => {
+    renderMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Caixa" }));
+    // Botão preso dentro do menu, depois o menu fecha pelo Esc sem pointerup.
+    fireEvent.pointerDown(screen.getByRole("menu"));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Caixa" }));
+    const item = screen.getByRole("menuitemradio", { name: "Caixa" });
+    fireEvent.focusOut(item, { relatedTarget: null });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("device_menu_clamps_active_item_when_devices_shrink", () => {
+    const { rerender } = render(
+      <DeviceMenu kind="device" tone="sage" label="Caixa" menuLabel="Saída" devices={devices} selectedId="c" onSelect={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Caixa" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "End" });
+    expect(screen.getByRole("menuitemradio", { name: "Headset" }).tabIndex).toBe(0);
+
+    // A lista encolhe com o menu aberto: o item ativo vai para o último que existe.
+    rerender(
+      <DeviceMenu kind="device" tone="sage" label="Caixa" menuLabel="Saída" devices={[devices[0]]} selectedId="c" onSelect={vi.fn()} />,
+    );
+    const items = screen.getAllByRole("menuitemradio");
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.tabIndex)).toEqual([-1, 0]);
+  });
+});

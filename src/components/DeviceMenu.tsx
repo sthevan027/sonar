@@ -69,6 +69,8 @@ export function DeviceMenu({
 }: DeviceMenuProps) {
   const [open, setOpen] = useState(false);
   const [side, setSide] = useState<"down" | "up">("down");
+  // `placed`: o lado já foi medido nesta abertura. Só então o menu é rolado para ficar visível.
+  const [placed, setPlaced] = useState(false);
   const [active, setActive] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -88,8 +90,15 @@ export function DeviceMenu({
     0,
     choices.findIndex((c) => c.id === selectedId),
   );
+  // Se a lista encolhe com o menu aberto, o item ativo fica no último existente.
+  const lastIndex = choices.length - 1;
+  const activeIndex = Math.min(active, lastIndex);
 
-  // Ao abrir: mede se cabe para baixo, rola para deixar o menu visível e foca o item ativo.
+  useEffect(() => {
+    if (active > lastIndex) setActive(lastIndex);
+  }, [active, lastIndex]);
+
+  // Ao abrir: mede se cabe para baixo e foca o item ativo, sem rolar (a rolagem vem depois do lado).
   useLayoutEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current;
@@ -106,20 +115,36 @@ export function DeviceMenu({
           boundsBottom: bounds?.bottom ?? window.innerHeight,
         }),
       );
-      menu.scrollIntoView?.({ block: "nearest" });
+      setPlaced(true);
     }
-    menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]')[active]?.focus();
-    // Só na abertura: `active` já foi definido por `openMenu`.
+    menuRef.current
+      ?.querySelectorAll<HTMLElement>('[role="menuitemradio"]')
+      [activeIndex]?.focus({ preventScroll: true });
+    // Só na abertura: `activeIndex` já foi definido por `openMenu`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Solta a guarda de ponteiro quando o botão sobe, em qualquer lugar.
+  // Rola só depois de o lado estar decidido: nada de rolar para um menu que vai virar.
+  useLayoutEffect(() => {
+    if (!open || !placed) return;
+    menuRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [open, placed, side]);
+
+  // A guarda de ponteiro é solta quando o botão sobe ou é cancelado, e sempre que o menu fecha.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      pointerInMenu.current = false;
+      return;
+    }
     const release = () => {
       pointerInMenu.current = false;
     };
     document.addEventListener("pointerup", release);
-    return () => document.removeEventListener("pointerup", release);
+    document.addEventListener("pointercancel", release);
+    return () => {
+      document.removeEventListener("pointerup", release);
+      document.removeEventListener("pointercancel", release);
+    };
   }, [open]);
 
   function itemsOf(): HTMLElement[] {
@@ -129,11 +154,13 @@ export function DeviceMenu({
   }
 
   function openMenu() {
+    setPlaced(false);
     setActive(selectedIndex);
     setOpen(true);
   }
 
   function close(returnFocus: boolean) {
+    pointerInMenu.current = false;
     setOpen(false);
     if (returnFocus) triggerRef.current?.focus();
   }
@@ -232,7 +259,7 @@ export function DeviceMenu({
               key={choice.id ?? "default"}
               label={choice.label}
               checked={choice.id === selectedId}
-              tabIndex={index === active ? 0 : -1}
+              tabIndex={index === activeIndex ? 0 : -1}
               onFocus={() => setActive(index)}
               onPress={() => choose(choice.id)}
             />
