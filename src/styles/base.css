@@ -1,0 +1,283 @@
+/* Estilos base e dos componentes. Valores dos mockups em docs/mockups/ (A.html como referência). */
+
+*,
+*::before,
+*::after {
+  margin: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-text);
+  color: var(--text);
+}
+
+#root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}
+
+/* Janela do painel: 388x668 dentro da janela transparente de 420x700. */
+.win {
+  width: 388px;
+  height: 668px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+}
+
+.ic {
+  display: block;
+  flex: none;
+}
+
+.lbl {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+  font-weight: 600;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+/* Cartão. `edit` = perfil em edição (contorno dourado); `off` = desligado (apagado). */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card.edit {
+  border-color: var(--brass);
+  box-shadow: 0 0 0 3px var(--brass-glow);
+}
+
+.card.off {
+  opacity: 0.62;
+}
+
+/* Abas (segmentadas). */
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px;
+}
+
+.tab {
+  flex: 1;
+  height: 34px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mute);
+}
+
+.tab.on {
+  background: var(--brass-bg);
+  color: var(--brass);
+}
+
+/* Chip de dispositivo (brass = saída/headset, sage = microfone/alto-falante). */
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid;
+  flex: none;
+  white-space: nowrap;
+}
+
+.chip.hs {
+  color: var(--brass);
+  border-color: var(--brass-line);
+  background: var(--brass-wash);
+}
+
+.chip.sp {
+  color: var(--sage);
+  border-color: var(--sage-line);
+  background: var(--sage-wash);
+}
+
+/* Barra de volume: trilho + preenchimento (i) + bolinha (u) + input invisível por cima. */
+.track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  position: relative;
+  flex: 1;
+}
+
+.track i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--text);
+  opacity: 0.85;
+}
+
+.track u {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.track.br i {
+  background: var(--brass);
+  opacity: 1;
+}
+
+.track-input {
+  position: absolute;
+  left: 0;
+  top: -10px;
+  width: 100%;
+  height: 26px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.track:focus-within u {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}
+
+.pct {
+  width: 30px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+/* Interruptor (ligado = dourado; desligado = trilho apagado com bolinha à esquerda). */
+.tog {
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--brass);
+  position: relative;
+  flex: none;
+  transition: background 150ms ease;
+}
+
+.tog i {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--panel);
+  transition: transform 150ms ease;
+}
+
+.tog.off {
+  background: var(--line);
+}
+
+.tog.off i {
+  right: auto;
+  left: 3px;
+  background: var(--mute);
+}
+
+/* Botão só de ícone. */
+.ibtn {
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.ibtn.sel {
+  border-color: var(--brass);
+  background: var(--brass-bg);
+}
+
+/* Ícone do app; sem ícone, a inicial num bloco neutro (sem cor de marca). */
+.logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex: none;
+  object-fit: contain;
+}
+
+.logo-init {
+  display: grid;
+  place-items: center;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--mute);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+}

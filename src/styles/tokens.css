@@ -10,6 +10,14 @@
   --sage: #86A9B8;
   --live: #8FBF7A;
 
+  /* Tons derivados dos mockups (fundo de item selecionado e bordas translúcidas). */
+  --brass-bg: #2D2819;
+  --brass-line: rgba(217, 164, 65, 0.45);
+  --brass-wash: rgba(217, 164, 65, 0.08);
+  --brass-glow: rgba(217, 164, 65, 0.14);
+  --sage-line: rgba(134, 169, 184, 0.45);
+  --sage-wash: rgba(134, 169, 184, 0.08);
+
   --font-display: "Bricolage Grotesque", sans-serif;
   --font-text: "DM Sans", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
