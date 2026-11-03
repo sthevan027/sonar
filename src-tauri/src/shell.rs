@@ -1,6 +1,5 @@
 //! Bandeja do sistema e janela do painel.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,11 +21,41 @@ const BLUR_GRACE: Duration = Duration::from_millis(250);
 type HiddenAt = Arc<Mutex<Option<Instant>>>;
 
 /// Enquanto o diálogo "Procurar .exe" está aberto, o painel perde o foco para ele e não deve
-/// se esconder. A interface liga e desliga pelo comando `set_blur_hide_suspended`.
-static BLUR_HIDE_SUSPENDED: AtomicBool = AtomicBool::new(false);
+/// se esconder. A interface liga e desliga pelo comando `set_blur_hide_suspended`. O prazo é
+/// a rede de segurança: se o "desligar" nunca chegar, o painel volta ao normal sozinho.
+const BLUR_SUSPEND_MAX: Duration = Duration::from_secs(60);
 
-pub fn set_blur_hide_suspended(suspended: bool) {
-    BLUR_HIDE_SUSPENDED.store(suspended, Ordering::SeqCst);
+/// Até quando a suspensão vale (`None` = sem suspensão).
+static BLUR_SUSPENDED_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Prazo para `suspended` a partir de `now`; `None` cancela a suspensão.
+fn suspension_deadline(suspended: bool, now: Instant) -> Option<Instant> {
+    suspended.then(|| now + BLUR_SUSPEND_MAX)
+}
+
+/// Suspenso enquanto há prazo e ele ainda não passou.
+fn is_suspended(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|until| now < until)
+}
+
+fn blur_deadline() -> std::sync::MutexGuard<'static, Option<Instant>> {
+    BLUR_SUSPENDED_UNTIL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Liga/desliga a suspensão. Ao desligar, se o painel continua visível e sem foco (o diálogo
+/// tomou o foco e não o devolveu), ele se esconde como faria pela perda de foco normal.
+pub fn set_blur_hide_suspended(app: &AppHandle, suspended: bool) {
+    *blur_deadline() = suspension_deadline(suspended, Instant::now());
+    if suspended {
+        return;
+    }
+    if let Some(panel) = app.get_webview_window(PANEL) {
+        if panel.is_visible().unwrap_or(false) && !panel.is_focused().unwrap_or(false) {
+            let _ = panel.hide();
+        }
+    }
 }
 
 pub fn setup(app: &mut App) -> tauri::Result<()> {
@@ -41,7 +70,7 @@ pub fn setup(app: &mut App) -> tauri::Result<()> {
         let hidden_at = hidden_at.clone();
         panel.on_window_event(move |event| match event {
             WindowEvent::Focused(false) => {
-                if !BLUR_HIDE_SUSPENDED.load(Ordering::SeqCst)
+                if !is_suspended(*blur_deadline(), Instant::now())
                     && window.is_visible().unwrap_or(false)
                 {
                     let _ = window.hide();
@@ -111,10 +140,34 @@ fn toggle_panel(app: &AppHandle, hidden_at: &HiddenAt) {
 }
 
 fn show(panel: &WebviewWindow) {
+    // Mostrar o painel é ação do usuário: nenhum diálogo segue suspendendo o esconder.
+    *blur_deadline() = None;
     let _ = panel.show();
     let _ = panel.set_focus();
 }
 
 fn lock(hidden_at: &HiddenAt) -> std::sync::MutexGuard<'_, Option<Instant>> {
     hidden_at.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suspension_deadline_is_set_only_when_suspending() {
+        let now = Instant::now();
+        assert_eq!(suspension_deadline(false, now), None);
+        assert_eq!(suspension_deadline(true, now), Some(now + BLUR_SUSPEND_MAX));
+    }
+
+    #[test]
+    fn suspension_holds_until_deadline_then_expires() {
+        let now = Instant::now();
+        let deadline = suspension_deadline(true, now);
+        assert!(is_suspended(deadline, now));
+        assert!(is_suspended(deadline, now + BLUR_SUSPEND_MAX - Duration::from_millis(1)));
+        assert!(!is_suspended(deadline, now + BLUR_SUSPEND_MAX));
+        assert!(!is_suspended(None, now));
+    }
 }

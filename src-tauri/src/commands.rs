@@ -9,7 +9,7 @@ use crate::shell;
 use crate::state::{AppState, Settings};
 use serde::Serialize;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 /// Evento com o snapshot completo (`AppState`), emitido pelo notificador do `Engine`.
 pub const STATE_CHANGED: &str = "state-changed";
@@ -146,8 +146,8 @@ pub fn app_icon(exe: String) -> Option<String> {
 
 /// Liga/desliga o esconder-ao-perder-foco do painel (true enquanto o diálogo de arquivo abre).
 #[tauri::command(async)]
-pub fn set_blur_hide_suspended(suspended: bool) {
-    shell::set_blur_hide_suspended(suspended);
+pub fn set_blur_hide_suspended(app: AppHandle, suspended: bool) {
+    shell::set_blur_hide_suspended(&app, suspended);
 }
 
 /// Roda `f` segurando pânico: um erro nos ícones ou na lista não derruba o app. Devolve o

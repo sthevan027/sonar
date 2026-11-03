@@ -62,6 +62,46 @@ pub fn matching_pids(exe: &str, processes: &[(u32, String)]) -> Vec<u32> {
         .collect()
 }
 
+/// Pedido de ícone aceito: um nome de executável (procurado nos processos abertos) ou um
+/// caminho absoluto de disco local.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ExeRequest<'a> {
+    Name(&'a str),
+    Path(&'a str),
+}
+
+/// Valida o texto que chega da interface. Aceita `spotify.exe` ou `C:\pasta\app.exe` (com
+/// `/` também). Rejeita vazio, UNC (`\\servidor\...`), caminhos verbatim (`\\?\...`),
+/// relativos, e qualquer coisa que não termine em `.exe` (sem diferenciar maiúsculas).
+pub fn parse_exe_request(exe: &str) -> Option<ExeRequest<'_>> {
+    let text = exe.trim();
+    if !has_exe_extension(text) {
+        return None;
+    }
+    if text.starts_with("\\\\") || text.starts_with("//") {
+        return None;
+    }
+    if text.contains(['\\', '/']) {
+        let bytes = text.as_bytes();
+        let absolute_drive = bytes.len() > 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/');
+        return absolute_drive.then_some(ExeRequest::Path(text));
+    }
+    // Nome puro não tem `:` (ex.: `C:x.exe` é caminho relativo ao drive, não um nome).
+    if text.contains(':') {
+        return None;
+    }
+    Some(ExeRequest::Name(text))
+}
+
+/// `.exe` com pelo menos um caractere antes (não vale só `.exe`).
+fn has_exe_extension(text: &str) -> bool {
+    let len = text.len();
+    len > 4 && text.is_char_boundary(len - 4) && text[len - 4..].eq_ignore_ascii_case(".exe")
+}
+
 /// BGRA (ordem do GDI) para RGBA. Ícone sem canal alfa (todos os bytes de alfa zerados)
 /// vira opaco; senão ele sairia totalmente invisível.
 pub fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
@@ -95,6 +135,7 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Strin
         writer
             .write_image_data(rgba)
             .map_err(|err| err.to_string())?;
+        writer.finish().map_err(|err| err.to_string())?;
     }
     Ok(out)
 }
@@ -283,19 +324,18 @@ mod windows_impl {
         out
     }
 
-    /// Caminho do executável para um nome (ex.: `spotify.exe`) ou o próprio caminho, se vier um.
+    /// Caminho do executável: um nome é procurado nos processos abertos; um caminho absoluto
+    /// local só vale se for um arquivo existente. Pedido inválido não toca no disco.
     fn resolve_path(exe: &str) -> Option<String> {
-        let wanted = exe.trim();
-        if wanted.is_empty() {
-            return None;
+        match parse_exe_request(exe)? {
+            ExeRequest::Path(path) => Path::new(path).is_file().then(|| path.to_string()),
+            ExeRequest::Name(name) => {
+                let processes = running_processes();
+                matching_pids(name, &processes)
+                    .into_iter()
+                    .find_map(process_image_path)
+            }
         }
-        if wanted.contains(['\\', '/']) {
-            return Path::new(wanted).is_file().then(|| wanted.to_string());
-        }
-        let processes = running_processes();
-        matching_pids(wanted, &processes)
-            .into_iter()
-            .find_map(process_image_path)
     }
 
     pub fn app_icon(exe: &str) -> Option<Vec<u8>> {
@@ -391,21 +431,30 @@ mod windows_impl {
         }
         .ok()?;
 
-        // Idioma e página de código do primeiro bloco de tradução (pares de u16, em bytes).
+        // Idioma e página de código do primeiro bloco de tradução (dois u16, em bytes).
         let (translation, len) = query(&block, "\\VarFileInfo\\Translation")?;
         if len < 4 {
             return None;
         }
-        // SAFETY: o ponteiro aponta para dentro de `block`, que ainda está vivo; `len` bytes.
-        let bytes = unsafe { std::slice::from_raw_parts(translation as *const u8, 4) };
-        let lang = u16::from_le_bytes([bytes[0], bytes[1]]);
-        let codepage = u16::from_le_bytes([bytes[2], bytes[3]]);
+        // SAFETY: `len >= 4` bytes começam em `translation`, dentro de `block` (vivo). A leitura
+        // não exige alinhamento: o bloco é de bytes e o Windows não garante o alinhamento.
+        let (lang, codepage) = unsafe {
+            (
+                std::ptr::read_unaligned(translation as *const u16),
+                std::ptr::read_unaligned((translation as *const u16).add(1)),
+            )
+        };
         let key = format!("\\StringFileInfo\\{lang:04x}{codepage:04x}\\FileDescription");
         let (text, len) = query(&block, &key)?;
-        // SAFETY: `len` é em caracteres UTF-16 (inclui o nulo final), dentro de `block`.
-        let units = unsafe { std::slice::from_raw_parts(text as *const u16, len as usize) };
-        let trimmed: Vec<u16> = units.iter().copied().take_while(|c| *c != 0).collect();
-        Some(String::from_utf16_lossy(&trimmed))
+        // `len` é em caracteres UTF-16 (inclui o nulo). Limita ao tamanho do bloco e copia
+        // para um Vec, para não depender de alinhamento nem do ponteiro depois.
+        let count = (len as usize).min(block.len() / 2);
+        // SAFETY: `count` unidades UTF-16 a partir de `text`, todas dentro de `block`.
+        let units: Vec<u16> = (0..count)
+            .map(|i| unsafe { std::ptr::read_unaligned((text as *const u16).add(i)) })
+            .take_while(|unit| *unit != 0)
+            .collect();
+        Some(String::from_utf16_lossy(&units))
     }
 
     /// Ponteiro e tamanho de um valor da versão (dentro de `block`).
@@ -553,6 +602,36 @@ mod tests {
         assert_eq!(base64_encode(b"Ma"), "TWE=");
         assert_eq!(base64_encode(b"Man"), "TWFu");
         assert_eq!(base64_encode(b"Hello, world"), "SGVsbG8sIHdvcmxk");
+    }
+
+    #[test]
+    fn parse_exe_request_accepts_names_and_absolute_local_paths() {
+        assert_eq!(parse_exe_request("spotify.exe"), Some(ExeRequest::Name("spotify.exe")));
+        assert_eq!(parse_exe_request("  SPOTIFY.EXE "), Some(ExeRequest::Name("SPOTIFY.EXE")));
+        assert_eq!(
+            parse_exe_request("C:\\Apps\\app.exe"),
+            Some(ExeRequest::Path("C:\\Apps\\app.exe"))
+        );
+        assert_eq!(
+            parse_exe_request("c:/apps/x.EXE"),
+            Some(ExeRequest::Path("c:/apps/x.EXE"))
+        );
+    }
+
+    #[test]
+    fn parse_exe_request_rejects_unc_verbatim_relative_and_non_exe() {
+        assert_eq!(parse_exe_request(""), None);
+        assert_eq!(parse_exe_request("   "), None);
+        assert_eq!(parse_exe_request("\\\\servidor\\share\\x.exe"), None);
+        assert_eq!(parse_exe_request("\\\\?\\C:\\x.exe"), None);
+        assert_eq!(parse_exe_request("//servidor/share/x.exe"), None);
+        assert_eq!(parse_exe_request("x.txt"), None);
+        assert_eq!(parse_exe_request("C:\\x.dll"), None);
+        assert_eq!(parse_exe_request("C:\\x"), None);
+        assert_eq!(parse_exe_request(".exe"), None);
+        assert_eq!(parse_exe_request("relativa\\x.exe"), None);
+        assert_eq!(parse_exe_request("..\\x.exe"), None);
+        assert_eq!(parse_exe_request("C:x.exe"), None);
     }
 
     #[test]
