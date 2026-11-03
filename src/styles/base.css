@@ -147,8 +147,20 @@ button:focus-visible {
   font-size: 12px;
   font-weight: 600;
   border: 1px solid;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   white-space: nowrap;
+}
+
+.chip > svg {
+  flex: none;
+}
+
+.chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chip.hs {
@@ -442,6 +454,7 @@ button:focus-visible {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .empty {
@@ -1193,4 +1206,40 @@ button.it:hover {
   font-size: 12px;
   color: var(--brass);
   white-space: nowrap;
+}
+
+/* Barras de rolagem discretas, no lugar das brancas do Windows. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(247, 244, 236, 0.18) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(247, 244, 236, 0.16);
+  border-radius: 6px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(247, 244, 236, 0.32);
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Chip dentro da linha de um app: encolhe com reticências e deixa espaço para o nome. */
+.row .chip {
+  max-width: 62%;
 }

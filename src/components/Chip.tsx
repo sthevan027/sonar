@@ -20,7 +20,7 @@ export function Chip({ kind, tone, label, onPress, icon, expanded, ref }: ChipPr
   const body = (
     <>
       {icon ?? <Icon name={kind === "mic" ? "mic" : "speaker"} size={15} />}
-      {label}
+      <span className="chip-label">{label}</span>
       {onPress && <Icon name="chevron-down" size={15} />}
     </>
   );
