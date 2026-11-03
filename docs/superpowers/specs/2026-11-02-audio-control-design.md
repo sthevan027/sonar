@@ -1,6 +1,6 @@
 # Sonar — design (v1)
 
-> Nome do produto: **Sonar** **[decidido, 2026-11-02]**. O repositório ainda se chama `audio-control` (renomear está pendente). Ícone em estudo (3 versões no Doop, https://doop.design/c/QGNSVqwX0n; recomendação: V3 "S de rota"). Decisões do Sthevan estão marcadas como **[decidido]**; escolhas minhas estão marcadas como **[minha escolha]** para ele conferir. Contexto e histórico em `docs/DECISOES.md`.
+> Nome do produto: **Sonar** **[decidido, 2026-11-02]**. O repositório ainda se chama `audio-control` (renomear está pendente). Ícone: o Sthevan escolheu uma referência (arcos de sinal + barra de volume), recriada como V4 (azul/branco) e V4b (grafite/latão) em https://doop.design/c/QGNSVqwX0n; falta escolher a paleta. Decisões do Sthevan estão marcadas como **[decidido]**; escolhas minhas estão marcadas como **[minha escolha]** para ele conferir. Contexto e histórico em `docs/DECISOES.md`.
 
 ## 1. Intenção e por quê
 
