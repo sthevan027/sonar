@@ -1,6 +1,6 @@
 [package]
 name = "sonar"
-version = "0.1.0"
+version = "0.1.1"
 description = "Controle de áudio por app no Windows"
 authors = ["Sthevan Santos"]
 edition = "2021"

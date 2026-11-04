@@ -30,11 +30,13 @@ TARGETS = {
 
 def read(rel: str) -> str:
     # newline="" preserva CRLF se o arquivo tiver.
-    return (ROOT / rel).read_text(encoding="utf-8", newline="")
+    with open(ROOT / rel, encoding="utf-8", newline="") as f:
+        return f.read()
 
 
 def write(rel: str, text: str) -> None:
-    (ROOT / rel).write_text(text, encoding="utf-8", newline="")
+    with open(ROOT / rel, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
 
 
 def current_versions() -> dict[str, str]:
