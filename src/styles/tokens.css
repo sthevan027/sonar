@@ -1,0 +1,40 @@
+/* Tokens do Sonar: "estúdio à noite". Valores de docs/mockups/A.html. */
+:root {
+  --bg: #0F0E0D;
+  --panel: #1B1A18;
+  --card: #25231F;
+  --line: #37332B;
+  --text: #EDE6D6;
+  --mute: #9A917F;
+  --brass: #D9A441;
+  --sage: #86A9B8;
+  --live: #8FBF7A;
+
+  /* Tons derivados dos mockups (fundo de item selecionado e bordas translúcidas). */
+  --brass-bg: #2D2819;
+  --brass-line: rgba(217, 164, 65, 0.45);
+  --brass-wash: rgba(217, 164, 65, 0.08);
+  --brass-glow: rgba(217, 164, 65, 0.14);
+  --brass-ring: rgba(217, 164, 65, 0.18);
+  --sage-line: rgba(134, 169, 184, 0.45);
+  --sage-wash: rgba(134, 169, 184, 0.08);
+  /* Aviso de erro (gravação falhou). Não é cor de marca: só sinaliza problema. */
+  --danger: #e0856f;
+  --danger-line: rgba(224, 133, 111, 0.45);
+  --danger-wash: rgba(224, 133, 111, 0.08);
+
+  --font-display: "Bricolage Grotesque", sans-serif;
+  --font-text: "DM Sans", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+/* A janela é transparente: o painel desenha o próprio fundo e os cantos. */
+html,
+body,
+#root {
+  margin: 0;
+  width: 420px;
+  height: 700px;
+  overflow: hidden;
+  background: transparent;
+}

@@ -1,0 +1,312 @@
+// @vitest-environment jsdom
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { ToastProvider } from "../components/Toast";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as api from "../api";
+import type { AppState, AudioSession, DeviceView } from "../types";
+import { groupSessions } from "./model";
+import { OutputTab } from "./OutputTab";
+
+vi.mock("../api", () => ({
+  appIcon: vi.fn(async () => null),
+  setAppRoute: vi.fn(async () => undefined),
+  setSessionVolume: vi.fn(async () => undefined),
+  setDeviceVolume: vi.fn(async () => undefined),
+  setDefaultDevice: vi.fn(async () => undefined),
+}));
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+  vi.useRealTimers();
+});
+
+function session(
+  pid: number,
+  exe: string,
+  overrides: Partial<AudioSession> = {},
+): AudioSession {
+  return { pid, exe, flow: "render", device: "c", active: true, volume: 0.5, muted: false, ...overrides };
+}
+
+describe("groupSessions", () => {
+  it("groupSessions_merges_pids_of_same_exe", () => {
+    const { active, silent } = groupSessions([
+      session(30, "chrome.exe"),
+      session(31, "chrome.exe", { volume: 0.2 }),
+      session(32, "chrome.exe", { active: false }),
+    ]);
+    expect(silent).toEqual([]);
+    expect(active).toHaveLength(1);
+    expect(active[0].exe).toBe("chrome.exe");
+    expect(active[0].pids).toEqual([30, 31, 32]);
+    expect(active[0].active).toBe(true);
+    expect(active[0].volume).toBe(0.5);
+  });
+
+  it("groupSessions_puts_inactive_in_silent", () => {
+    const { active, silent } = groupSessions([
+      session(10, "spotify.exe"),
+      session(40, "obs.exe", { active: false }),
+    ]);
+    expect(active.map((r) => r.exe)).toEqual(["spotify.exe"]);
+    expect(silent.map((r) => r.exe)).toEqual(["obs.exe"]);
+    expect(silent[0].active).toBe(false);
+  });
+
+  it("groupSessions_ignores_capture_sessions_in_output_tab", () => {
+    const { active, silent } = groupSessions([
+      session(50, "discord.exe", { flow: "capture" }),
+      session(20, "discord.exe"),
+    ]);
+    expect(active.map((r) => r.pids)).toEqual([[20]]);
+    expect(silent).toEqual([]);
+  });
+});
+
+const devices: DeviceView[] = [
+  device({ id: "c", windows_name: "Alto-falantes", display_name: "Caixa", is_default: true, volume: 0.62 }),
+  device({ id: "h", windows_name: "Fone", display_name: "Headset", icon: "headphones", volume: 0.8 }),
+  device({
+    id: "old",
+    windows_name: "Monitor",
+    display_name: "Monitor antigo",
+    connected: false,
+    has_rules: true,
+  }),
+  device({
+    id: "m",
+    flow: "capture",
+    windows_name: "Microfone do headset",
+    display_name: "Mic do headset",
+    is_default: true,
+  }),
+];
+
+function device(overrides: Partial<DeviceView>): DeviceView {
+  return {
+    id: "x",
+    flow: "render",
+    windows_name: "Dispositivo",
+    name: null,
+    display_name: "Dispositivo",
+    icon: null,
+    hidden: false,
+    connected: true,
+    is_default: false,
+    has_rules: false,
+    volume: 1,
+    muted: false,
+    ...overrides,
+  };
+}
+
+function makeState(overrides: Partial<AppState> = {}): AppState {
+  return {
+    devices,
+    sessions: [
+      session(10, "spotify.exe", { device: "c", volume: 0.48 }),
+      session(20, "discord.exe", { device: "h", volume: 0.8 }),
+      session(30, "chrome.exe", { device: "c", volume: 0.35 }),
+      session(31, "chrome.exe", { device: "c", volume: 0.35 }),
+      session(40, "obs.exe", { active: false, volume: 1 }),
+      session(50, "discord.exe", { flow: "capture" }),
+    ],
+    rules: [
+      { exe: "spotify.exe", flow: "render", device: "h" },
+      { exe: "discord.exe", flow: "render", device: "old" },
+    ],
+    profiles: [],
+    settings: { shortcut: "Super+Alt+V", autostart: false },
+    routing_available: true,
+    last_profile: null,
+    save_error: null,
+    ...overrides,
+  };
+}
+
+function renderTab(node: ReactElement) {
+  return render(<ToastProvider>{node}</ToastProvider>);
+}
+
+describe("OutputTab", () => {
+  it("output_tab_renders_default_output_apps_and_collapsed_silent_row", () => {
+    renderTab(<OutputTab state={makeState()} />);
+
+    expect(screen.getByText("Caixa")).toBeTruthy();
+    expect(screen.getByText("Spotify")).toBeTruthy();
+    expect(screen.getByText("Discord")).toBeTruthy();
+    expect(screen.getAllByText("Chrome")).toHaveLength(1);
+    expect(screen.getByText("3 tocando")).toBeTruthy();
+
+    // Spotify tem regra para o Headset conectado; Discord aponta para um dispositivo desligado.
+    expect(screen.getByRole("button", { name: "Headset" })).toBeTruthy();
+    expect(screen.getByText("Monitor antigo desconectado: usando o padrão do Windows")).toBeTruthy();
+
+    // Em silêncio começa recolhida.
+    const toggle = screen.getByRole("button", { name: /Em silêncio/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Obs")).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Obs")).toBeTruthy();
+  });
+
+  it("output_tab_routes_app_to_chosen_device", () => {
+    renderTab(<OutputTab state={makeState()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Headset" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Caixa" }));
+    expect(api.setAppRoute).toHaveBeenCalledWith("spotify.exe", "render", "c");
+  });
+
+  it("output_tab_volume_sends_first_move_now_and_final_value_after_window", () => {
+    vi.useFakeTimers();
+    renderTab(<OutputTab state={makeState()} />);
+    const slider = screen.getByRole("slider", { name: "Volume do Chrome" });
+
+    fireEvent.change(slider, { target: { value: "40" } });
+    expect(api.setSessionVolume).toHaveBeenCalledTimes(2);
+    expect(api.setSessionVolume).toHaveBeenCalledWith(30, "render", 0.4);
+
+    fireEvent.change(slider, { target: { value: "45" } });
+    expect(api.setSessionVolume).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(60);
+    expect(api.setSessionVolume).toHaveBeenCalledTimes(4);
+    expect(api.setSessionVolume).toHaveBeenCalledWith(30, "render", 0.45);
+    expect(api.setSessionVolume).toHaveBeenCalledWith(31, "render", 0.45);
+  });
+
+  it("output_tab_route_failure_shows_toast", async () => {
+    vi.mocked(api.setAppRoute).mockRejectedValueOnce(new Error("falhou"));
+    renderTab(<OutputTab state={makeState()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Headset" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Caixa" }));
+    expect(await screen.findByText("Não foi possível mudar a saída de Spotify.")).toBeTruthy();
+  });
+
+  it("output_tab_default_output_failure_shows_toast", async () => {
+    vi.mocked(api.setDefaultDevice).mockRejectedValueOnce(new Error("falhou"));
+    renderTab(<OutputTab state={makeState()} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Headset" }));
+    expect(await screen.findByText("Não foi possível trocar a saída padrão.")).toBeTruthy();
+    expect(api.setDefaultDevice).toHaveBeenCalledWith("h", "render");
+  });
+
+  it("output_tab_partial_pid_failure_is_silent", async () => {
+    // Um PID que já fechou falha; o outro aceita. Não é erro para o usuário.
+    vi.mocked(api.setSessionVolume)
+      .mockRejectedValueOnce(new Error("pid fechado"))
+      .mockResolvedValueOnce(undefined);
+    renderTab(<OutputTab state={makeState()} />);
+    await act(async () => {
+      fireEvent.change(screen.getByRole("slider", { name: "Volume do Chrome" }), { target: { value: "40" } });
+    });
+    expect(api.setSessionVolume).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status").querySelectorAll(".toast")).toHaveLength(0);
+  });
+
+  it("output_tab_all_pids_failing_shows_one_volume_toast", async () => {
+    vi.mocked(api.setSessionVolume)
+      .mockRejectedValueOnce(new Error("a"))
+      .mockRejectedValueOnce(new Error("b"));
+    renderTab(<OutputTab state={makeState()} />);
+    await act(async () => {
+      fireEvent.change(screen.getByRole("slider", { name: "Volume do Chrome" }), { target: { value: "40" } });
+    });
+    expect(await screen.findByText("Não foi possível mudar o volume.")).toBeTruthy();
+  });
+
+  it("output_tab_empty_states_without_apps_or_devices", () => {
+    renderTab(<OutputTab state={makeState({ sessions: [], devices: [] })} />);
+    expect(screen.getByText(/Nenhum app com som agora/)).toBeTruthy();
+    expect(screen.getByText("Nenhuma saída conectada")).toBeTruthy();
+  });
+});
+
+
+describe("OutputTab: escolha de saída com resposta imediata", () => {
+  /** Próximo `setAppRoute` fica pendente até o teste decidir. */
+  function holdNextRoute() {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    vi.mocked(api.setAppRoute).mockImplementationOnce(
+      () =>
+        new Promise<void>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        }),
+    );
+    return { resolve: () => resolve(), reject: (e: Error) => reject(e) };
+  }
+
+  function chooseFor(appChipName: string, deviceName: string) {
+    fireEvent.click(screen.getByRole("button", { name: appChipName }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: deviceName }));
+  }
+
+  it("output_tab_shows_chosen_device_before_system_answers", () => {
+    holdNextRoute();
+    renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+
+    expect(screen.getByRole("button", { name: "Caixa" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Headset" })).toBeNull();
+    expect(api.setAppRoute).toHaveBeenCalledWith("spotify.exe", "render", "c");
+  });
+
+  it("output_tab_in_flight_state_without_the_choice_does_not_revert_it", () => {
+    holdNextRoute();
+    const { rerender } = renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+
+    rerender(<ToastProvider><OutputTab state={makeState()} /></ToastProvider>);
+
+    expect(screen.getByRole("button", { name: "Caixa" })).toBeTruthy();
+  });
+
+  it("output_tab_matching_state_confirms_choice_and_later_external_change_wins", () => {
+    holdNextRoute();
+    const { rerender } = renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+
+    const confirmed = makeState({
+      rules: [
+        { exe: "spotify.exe", flow: "render", device: "c" },
+        { exe: "discord.exe", flow: "render", device: "old" },
+      ],
+    });
+    rerender(<ToastProvider><OutputTab state={confirmed} /></ToastProvider>);
+    expect(screen.getByRole("button", { name: "Caixa" })).toBeTruthy();
+
+    // A escolha já foi confirmada: uma mudança feita fora do painel aparece.
+    rerender(<ToastProvider><OutputTab state={makeState()} /></ToastProvider>);
+    expect(screen.getByRole("button", { name: "Headset" })).toBeTruthy();
+  });
+
+  it("output_tab_rejected_choice_reverts_and_shows_toast", async () => {
+    const held = holdNextRoute();
+    renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+
+    await act(async () => held.reject(new Error("falhou")));
+
+    expect(screen.getByRole("button", { name: "Headset" })).toBeTruthy();
+    expect(await screen.findByText("Não foi possível mudar a saída de Spotify.")).toBeTruthy();
+  });
+
+  it("output_tab_late_failure_of_older_choice_keeps_newer_one", async () => {
+    const first = holdNextRoute();
+    holdNextRoute();
+    renderTab(<OutputTab state={makeState()} />);
+    chooseFor("Headset", "Caixa");
+    // Escolhe de novo (Headset) enquanto a primeira ainda não respondeu.
+    chooseFor("Caixa", "Headset");
+    expect(screen.getByRole("button", { name: "Headset" })).toBeTruthy();
+
+    await act(async () => first.reject(new Error("falhou")));
+
+    expect(screen.getByRole("button", { name: "Headset" })).toBeTruthy();
+  });
+});

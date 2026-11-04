@@ -1,0 +1,471 @@
+//! Bandeja do sistema, janela do painel, atalho global e "Iniciar com o Windows".
+
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+use tauri::image::Image;
+use tauri::menu::MenuBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{App, AppHandle, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+
+use crate::shell_geometry::{corner_fallback, place_near_tray, Rect, Size};
+use crate::state::Settings;
+
+const PANEL: &str = "panel";
+const TRAY_ID: &str = "main-tray";
+const TRAY_ICON: &[u8] = include_bytes!("../icons/tray.png");
+/// Tamanho do painel em pixels lógicos (igual ao `tauri.conf.json`); em pixels físicos vem
+/// multiplicado pela escala do monitor onde ele abre.
+const PANEL_WIDTH: f64 = 420.0;
+const PANEL_HEIGHT: f64 = 700.0;
+const AUTOSTART_VALUE: &str = "Sonar";
+#[cfg(windows)]
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+/// Depois de o painel se esconder por perda de foco, um clique na bandeja dentro
+/// deste intervalo não o reabre: o próprio clique é o que tirou o foco (mousedown
+/// esconde, mouseup chega como clique).
+const BLUR_GRACE: Duration = Duration::from_millis(250);
+
+/// Quando o painel foi escondido por perda de foco pela última vez.
+type HiddenAt = Arc<Mutex<Option<Instant>>>;
+
+/// Último retângulo conhecido do ícone da bandeja, em pixels físicos. `None` antes do primeiro
+/// evento com posição válida: o painel então abre no canto da área de trabalho.
+static LAST_TRAY: Mutex<Option<Rect>> = Mutex::new(None);
+
+/// Atalho que está registrado agora (`None` antes do primeiro registro).
+static REGISTERED_SHORTCUT: Mutex<Option<String>> = Mutex::new(None);
+
+/// Enquanto o diálogo "Procurar .exe" está aberto, o painel perde o foco para ele e não deve
+/// se esconder. A interface liga e desliga pelo comando `set_blur_hide_suspended`. O prazo é
+/// a rede de segurança: se o "desligar" nunca chegar, o painel volta ao normal sozinho.
+const BLUR_SUSPEND_MAX: Duration = Duration::from_secs(60);
+
+/// Até quando a suspensão vale (`None` = sem suspensão).
+static BLUR_SUSPENDED_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Prazo para `suspended` a partir de `now`; `None` cancela a suspensão.
+fn suspension_deadline(suspended: bool, now: Instant) -> Option<Instant> {
+    suspended.then(|| now + BLUR_SUSPEND_MAX)
+}
+
+/// Suspenso enquanto há prazo e ele ainda não passou.
+fn is_suspended(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|until| now < until)
+}
+
+fn blur_deadline() -> MutexGuard<'static, Option<Instant>> {
+    locked(&BLUR_SUSPENDED_UNTIL)
+}
+
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Liga/desliga a suspensão. Ao desligar, se o painel continua visível e sem foco (o diálogo
+/// tomou o foco e não o devolveu), ele se esconde como faria pela perda de foco normal.
+pub fn set_blur_hide_suspended(app: &AppHandle, suspended: bool) {
+    *blur_deadline() = suspension_deadline(suspended, Instant::now());
+    if suspended {
+        return;
+    }
+    if let Some(panel) = app.get_webview_window(PANEL) {
+        if panel.is_visible().unwrap_or(false) && !panel.is_focused().unwrap_or(false) {
+            let _ = panel.hide();
+        }
+    }
+}
+
+pub fn setup(app: &mut App) -> tauri::Result<()> {
+    let panel = app
+        .get_webview_window(PANEL)
+        .ok_or(tauri::Error::WindowNotFound)?;
+    let hidden_at: HiddenAt = Arc::new(Mutex::new(None));
+    // O atalho global usa o mesmo `hidden_at` da bandeja: a graça de 250 ms vale para os dois.
+    app.manage(hidden_at.clone());
+
+    // Perder o foco esconde o painel. Fechar (Alt+F4) também só esconde: o app vive na bandeja.
+    {
+        let window = panel.clone();
+        let hidden_at = hidden_at.clone();
+        panel.on_window_event(move |event| match event {
+            WindowEvent::Focused(false) => {
+                if !is_suspended(*blur_deadline(), Instant::now())
+                    && window.is_visible().unwrap_or(false)
+                {
+                    let _ = window.hide();
+                    *lock(&hidden_at) = Some(Instant::now());
+                }
+            }
+            WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            _ => {}
+        });
+    }
+
+    let menu = MenuBuilder::new(app)
+        .text("open", "Abrir")
+        .separator()
+        .text("quit", "Sair")
+        .build()?;
+
+    let icon = Image::from_bytes(TRAY_ICON)?;
+
+    TrayIconBuilder::with_id(TRAY_ID)
+        .icon(icon)
+        .tooltip("Sonar")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => show_panel(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(move |tray, event| {
+            let app = tray.app_handle();
+            remember_tray_rect(app, &event);
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_panel(app, &hidden_at);
+            }
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
+/// Guarda onde está o ícone (pixels físicos). Posição ou tamanho zerados não contam.
+fn remember_tray_rect(app: &AppHandle, event: &TrayIconEvent) {
+    let rect = match event {
+        TrayIconEvent::Click { rect, .. }
+        | TrayIconEvent::DoubleClick { rect, .. }
+        | TrayIconEvent::Enter { rect, .. }
+        | TrayIconEvent::Move { rect, .. }
+        | TrayIconEvent::Leave { rect, .. } => rect,
+        _ => return,
+    };
+    let scale = app
+        .get_webview_window(PANEL)
+        .and_then(|panel| panel.scale_factor().ok())
+        .unwrap_or(1.0);
+    let position = rect.position.to_physical::<i32>(scale);
+    let size = rect.size.to_physical::<u32>(scale);
+    let known = size.width > 0 && size.height > 0 && (position.x, position.y) != (0, 0);
+    *locked(&LAST_TRAY) = known.then(|| Rect {
+        x: position.x,
+        y: position.y,
+        width: size.width as i32,
+        height: size.height as i32,
+    });
+}
+
+/// Mostra e foca o painel. Usado pelo menu "Abrir" e pela segunda execução do app.
+pub fn show_panel(app: &AppHandle) {
+    if let Some(panel) = app.get_webview_window(PANEL) {
+        show(&panel);
+    }
+}
+
+fn toggle_panel(app: &AppHandle, hidden_at: &HiddenAt) {
+    let Some(panel) = app.get_webview_window(PANEL) else {
+        return;
+    };
+    if panel.is_visible().unwrap_or(false) {
+        let _ = panel.hide();
+        return;
+    }
+    let just_hidden_by_blur = lock(hidden_at).is_some_and(|at| at.elapsed() < BLUR_GRACE);
+    if !just_hidden_by_blur {
+        show(&panel);
+    }
+}
+
+/// Atalho global: alterna o painel pelo mesmo caminho da bandeja (graça e suspensão valem).
+pub fn toggle_from_shortcut(app: &AppHandle) {
+    let Some(hidden_at) = app.try_state::<HiddenAt>() else {
+        return;
+    };
+    toggle_panel(app, &hidden_at);
+}
+
+fn show(panel: &WebviewWindow) {
+    // Mostrar o painel é ação do usuário: nenhum diálogo segue suspendendo o esconder.
+    *blur_deadline() = None;
+    // Posiciona antes de mostrar: o painel nunca aparece no centro da tela.
+    position_panel(panel);
+    let _ = panel.show();
+    let _ = panel.set_focus();
+}
+
+/// Põe o painel perto do ícone da bandeja (último conhecido), dentro da área de trabalho do
+/// monitor onde o ícone está. Sem ícone conhecido: canto inferior direito do monitor principal.
+fn position_panel(panel: &WebviewWindow) {
+    let tray = *locked(&LAST_TRAY);
+    let monitor = match tray {
+        Some(rect) => panel
+            .monitor_from_point(
+                f64::from(rect.x) + f64::from(rect.width) / 2.0,
+                f64::from(rect.y) + f64::from(rect.height) / 2.0,
+            )
+            .ok()
+            .flatten(),
+        None => None,
+    }
+    .or_else(|| panel.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let window = Size {
+        width: (PANEL_WIDTH * scale).round() as i32,
+        height: (PANEL_HEIGHT * scale).round() as i32,
+    };
+    let work = monitor.work_area();
+    let work_area = Rect {
+        x: work.position.x,
+        y: work.position.y,
+        width: work.size.width as i32,
+        height: work.size.height as i32,
+    };
+    let point = match tray {
+        Some(rect) => place_near_tray(rect, work_area, window),
+        None => corner_fallback(work_area, window),
+    };
+    let _ = panel.set_position(PhysicalPosition::new(point.x, point.y));
+}
+
+fn lock(hidden_at: &HiddenAt) -> MutexGuard<'_, Option<Instant>> {
+    hidden_at.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Quem troca o atalho registrado. Separado do plugin para os testes rodarem sem o sistema.
+pub trait ShortcutRegistrar {
+    /// `Err` com frase em português quando o texto não é um atalho ou o sistema recusa.
+    fn register(&self, accelerator: &str) -> Result<(), String>;
+    fn unregister(&self, accelerator: &str);
+}
+
+/// Troca o atalho. Registra o novo antes de soltar o antigo: se o novo falhar, o antigo segue
+/// valendo e nada muda. Atalho igual ao atual não faz nada.
+pub fn switch_shortcut(
+    registrar: &dyn ShortcutRegistrar,
+    current: Option<&str>,
+    next: &str,
+) -> Result<(), String> {
+    if current == Some(next) {
+        return Ok(());
+    }
+    registrar.register(next)?;
+    if let Some(old) = current {
+        registrar.unregister(old);
+    }
+    Ok(())
+}
+
+/// Registro real pelo plugin `tauri-plugin-global-shortcut`.
+struct PluginShortcuts<'a> {
+    app: &'a AppHandle,
+}
+
+impl ShortcutRegistrar for PluginShortcuts<'_> {
+    fn register(&self, accelerator: &str) -> Result<(), String> {
+        let shortcut: Shortcut = accelerator
+            .parse()
+            .map_err(|_| format!("Atalho inválido: {accelerator}."))?;
+        self.app.global_shortcut().register(shortcut).map_err(|_| {
+            format!("Não foi possível registrar o atalho {accelerator}. Outro programa pode estar usando essa combinação.")
+        })
+    }
+
+    fn unregister(&self, accelerator: &str) {
+        if let Ok(shortcut) = accelerator.parse::<Shortcut>() {
+            let _ = self.app.global_shortcut().unregister(shortcut);
+        }
+    }
+}
+
+/// Registra o atalho guardado agora. Em falha o atalho anterior segue e a frase vai de volta.
+pub fn apply_shortcut(app: &AppHandle, accelerator: &str) -> Result<(), String> {
+    let mut current = locked(&REGISTERED_SHORTCUT);
+    switch_shortcut(&PluginShortcuts { app }, current.as_deref(), accelerator)?;
+    *current = Some(accelerator.to_string());
+    Ok(())
+}
+
+/// Liga ou desliga "Iniciar com o Windows": valor `Sonar` em `HKCU\...\Run` com o caminho do
+/// executável entre aspas. Desligar remove o valor (sem erro se ele não existir).
+#[cfg(windows)]
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    use std::io::ErrorKind;
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
+    use winreg::RegKey;
+
+    // `create_subkey_with_flags` devolve (chave, se foi criada ou aberta); só a chave importa.
+    let (run, _) = RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey_with_flags(RUN_KEY, KEY_SET_VALUE)
+        .map_err(|err| format!("Não foi possível abrir o registro do Windows ({err})."))?;
+    if enabled {
+        let exe = std::env::current_exe()
+            .map_err(|err| format!("Não foi possível achar o programa ({err})."))?;
+        run.set_value(AUTOSTART_VALUE, &format!("\"{}\"", exe.display()))
+            .map_err(|err| format!("Não foi possível ligar Iniciar com o Windows ({err})."))
+    } else {
+        match run.delete_value(AUTOSTART_VALUE) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!(
+                "Não foi possível desligar Iniciar com o Windows ({err})."
+            )),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_autostart(_enabled: bool) -> Result<(), String> {
+    Ok(())
+}
+
+/// Aplica o que foi salvo ao abrir o app: atalho e "Iniciar com o Windows" (que re-grava o
+/// caminho do executável, caso ele tenha mudado). Falha vira aviso no log: o app segue.
+pub fn apply_at_startup(app: &AppHandle, settings: &Settings) {
+    if let Err(err) = apply_shortcut(app, &settings.shortcut) {
+        eprintln!("sonar: {err}");
+    }
+    if let Err(err) = set_autostart(settings.autostart) {
+        eprintln!("sonar: {err}");
+    }
+}
+
+/// Aplica atalho e "Iniciar com o Windows" de uma gravação de configurações. Falha devolve a
+/// frase para a tela e a gravação não acontece: se o "Iniciar com o Windows" falhar, o atalho
+/// volta ao anterior.
+pub fn apply_settings(app: &AppHandle, previous: &Settings, next: &Settings) -> Result<(), String> {
+    apply_shortcut(app, &next.shortcut)?;
+    if let Err(err) = set_autostart(next.autostart) {
+        let _ = apply_shortcut(app, &previous.shortcut);
+        return Err(err);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn suspension_deadline_is_set_only_when_suspending() {
+        let now = Instant::now();
+        assert_eq!(suspension_deadline(false, now), None);
+        assert_eq!(suspension_deadline(true, now), Some(now + BLUR_SUSPEND_MAX));
+    }
+
+    #[test]
+    fn suspension_holds_until_deadline_then_expires() {
+        let now = Instant::now();
+        let deadline = suspension_deadline(true, now);
+        assert!(is_suspended(deadline, now));
+        assert!(is_suspended(deadline, now + BLUR_SUSPEND_MAX - Duration::from_millis(1)));
+        assert!(!is_suspended(deadline, now + BLUR_SUSPEND_MAX));
+        assert!(!is_suspended(None, now));
+    }
+
+    /// Registro falso: atalhos que começam com "bad" são recusados; o resto é aceito.
+    #[derive(Default)]
+    struct FakeRegistrar {
+        calls: RefCell<Vec<String>>,
+    }
+
+    impl ShortcutRegistrar for FakeRegistrar {
+        fn register(&self, accelerator: &str) -> Result<(), String> {
+            self.calls.borrow_mut().push(format!("register {accelerator}"));
+            if accelerator.starts_with("bad") {
+                return Err(format!("Atalho inválido: {accelerator}."));
+            }
+            Ok(())
+        }
+
+        fn unregister(&self, accelerator: &str) {
+            self.calls.borrow_mut().push(format!("unregister {accelerator}"));
+        }
+    }
+
+    #[test]
+    fn invalid_shortcut_keeps_previous() {
+        let registrar = FakeRegistrar::default();
+
+        let result = switch_shortcut(&registrar, Some("Super+Alt+V"), "bad+Key");
+
+        assert_eq!(result, Err("Atalho inválido: bad+Key.".to_string()));
+        // O antigo não foi soltado: continua valendo.
+        assert_eq!(*registrar.calls.borrow(), vec!["register bad+Key".to_string()]);
+    }
+
+    #[test]
+    fn switch_registers_new_before_releasing_old() {
+        let registrar = FakeRegistrar::default();
+
+        switch_shortcut(&registrar, Some("Ctrl+Alt+K"), "Super+Alt+V").unwrap();
+
+        assert_eq!(
+            *registrar.calls.borrow(),
+            vec![
+                "register Super+Alt+V".to_string(),
+                "unregister Ctrl+Alt+K".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn same_shortcut_is_a_no_op() {
+        let registrar = FakeRegistrar::default();
+
+        switch_shortcut(&registrar, Some("Super+Alt+V"), "Super+Alt+V").unwrap();
+
+        assert!(registrar.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn every_shortcut_the_settings_screen_can_produce_parses() {
+        // Mesmo conjunto de `shortcutFromKeys` (src/screens/settingsModel.ts): Ctrl, Alt,
+        // Shift e Super, com pelo menos Ctrl, Alt ou Super; tecla letra, dígito ou F1 a F12.
+        let modifiers = ["Ctrl", "Alt", "Shift", "Super"];
+        let mut mains: Vec<String> = ('A'..='Z').map(|c| c.to_string()).collect();
+        mains.extend((0..=9).map(|d| d.to_string()));
+        mains.extend((1..=12).map(|f| format!("F{f}")));
+        let mut checked = 0;
+        for mask in 0u32..16 {
+            let chosen: Vec<&str> = modifiers
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, m)| *m)
+                .collect();
+            let strong = chosen.iter().any(|m| *m != "Shift");
+            if !strong {
+                continue;
+            }
+            for main in &mains {
+                let mut parts = chosen.clone();
+                parts.push(main);
+                let accelerator = parts.join("+");
+                assert!(
+                    accelerator.parse::<Shortcut>().is_ok(),
+                    "atalho da tela não é aceito pelo plugin: {accelerator}"
+                );
+                checked += 1;
+            }
+        }
+        // 14 combinações de modificadores (16 menos as que são só Shift) x 48 teclas principais.
+        assert_eq!(checked, 14 * 48);
+        assert!("Super+Alt+V".parse::<Shortcut>().is_ok());
+    }
+}

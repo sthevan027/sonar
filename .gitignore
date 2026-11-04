@@ -2,3 +2,9 @@ target/
 # backup do registro do PC de casa (dados locais) e copia local de codigo de terceiros
 backup/
 ref/
+
+# Sonar (app Tauri)
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/

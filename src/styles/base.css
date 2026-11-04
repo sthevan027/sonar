@@ -1,0 +1,1286 @@
+/* Estilos base e dos componentes. Valores dos mockups em docs/mockups/ (A.html como referência). */
+
+*,
+*::before,
+*::after {
+  margin: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-text);
+  color: var(--text);
+}
+
+#root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}
+
+/* Janela do painel: 388x668 dentro da janela transparente de 420x700. */
+.win {
+  position: relative;
+  width: 388px;
+  height: 668px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+}
+
+.ic {
+  display: block;
+  flex: none;
+}
+
+.lbl {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+  font-weight: 600;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+/* Linha de volume (ícone + barra + %), gap 10 como nos mockups. */
+.slider-row {
+  gap: 10px;
+}
+
+/* Cartão. `edit` = perfil em edição (contorno dourado); `off` = desligado (apagado). */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card.edit {
+  border-color: var(--brass);
+  box-shadow: 0 0 0 3px var(--brass-glow);
+}
+
+.card.off {
+  opacity: 0.62;
+}
+
+/* Abas (segmentadas). */
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px;
+}
+
+.tab {
+  flex: 1;
+  height: 34px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mute);
+}
+
+.tab.on {
+  background: var(--brass-bg);
+  color: var(--brass);
+}
+
+/* Chip de dispositivo (brass = saída/headset, sage = microfone/alto-falante). */
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.chip > svg {
+  flex: none;
+}
+
+.chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip.hs {
+  color: var(--brass);
+  border-color: var(--brass-line);
+  background: var(--brass-wash);
+}
+
+.chip.sp {
+  color: var(--sage);
+  border-color: var(--sage-line);
+  background: var(--sage-wash);
+}
+
+/* Barra de volume: trilho + preenchimento (i) + bolinha (u) + input invisível por cima. */
+.track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  position: relative;
+  flex: 1;
+}
+
+.track i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--text);
+  opacity: 0.85;
+}
+
+.track u {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.track.br i {
+  background: var(--brass);
+  opacity: 1;
+}
+
+.track-input {
+  position: absolute;
+  left: 0;
+  top: -10px;
+  width: 100%;
+  height: 26px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  pointer-events: none; /* o arrasto é do trilho; o input fica para teclado e leitor de tela */
+}
+
+.track {
+  touch-action: none;
+  cursor: pointer;
+}
+.track::before {
+  /* Área de toque mais alta que o trilho de 6px. */
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -10px;
+  bottom: -10px;
+}
+
+/* Ícone de som que também silencia (clique = mudo / som). */
+.mute-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: -4px;
+  border-radius: 8px;
+  color: var(--mute);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  flex: none;
+}
+.mute-btn:hover {
+  color: var(--text);
+  background: var(--card);
+}
+.mute-btn[aria-pressed="true"] {
+  color: var(--brass);
+}
+.mute-btn:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 1px;
+}
+
+/* Polegar sem tamanho: o ponteiro mapeia para a largura inteira, como a bolinha `u`. */
+.track-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 0;
+}
+
+.track-input::-moz-range-thumb {
+  width: 0;
+  height: 0;
+  border: 0;
+}
+
+.track:has(.track-input:focus-visible) u {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}
+
+.pct {
+  width: 30px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+/* Interruptor (ligado = dourado; desligado = trilho apagado com bolinha à esquerda). */
+.tog {
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--brass);
+  position: relative;
+  flex: none;
+  transition: background 150ms ease;
+}
+
+/* A bolinha fica sempre em left: 3px e só anda com transform, para a transição aplicar nos dois sentidos. */
+.tog i {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--panel);
+  transform: translateX(18px);
+  transition:
+    transform 150ms ease,
+    background 150ms ease;
+}
+
+.tog.off {
+  background: var(--line);
+}
+
+.tog.off i {
+  transform: translateX(0);
+  background: var(--mute);
+}
+
+.tog:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}
+
+/* Botão só de ícone. Medidas e fundo de cada tamanho vêm dos mockups (.ab, .back, .g, .pbtn). */
+.ibtn {
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.ibtn.s32 {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+
+.ibtn.s34 {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.ibtn.s38 {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+
+.ibtn.s44 {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  background: var(--card);
+}
+
+.ibtn.sel {
+  border-color: var(--brass);
+  background: var(--brass-bg);
+}
+
+.ibtn.s44.sel {
+  box-shadow: 0 0 0 3px var(--brass-ring);
+}
+
+/* Mensagem de erro com botão de nova tentativa. */
+.error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--mute);
+  font-size: 13px;
+}
+
+.btn {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 11px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* Ícone do app; sem ícone, a inicial num bloco neutro (sem cor de marca). */
+.logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex: none;
+  object-fit: contain;
+}
+
+.logo-init {
+  display: grid;
+  place-items: center;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--mute);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ---- Painel (Tasks 11): perfis, abas, listas de apps. Medidas de docs/mockups/A.html e A2.html. ---- */
+
+.tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.row > .ic {
+  color: var(--mute);
+}
+
+.slider-row > .ic {
+  color: var(--mute);
+}
+
+.who {
+  flex: 1;
+  min-width: 0;
+}
+
+.who .lbl {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.who b {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.who .o {
+  display: block;
+  font-size: 12px;
+  color: var(--mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cnt {
+  font-size: 12px;
+  color: var(--mute);
+  display: inline-flex;
+  align-items: center;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 0 3px rgba(143, 191, 122, 0.18);
+  display: inline-block;
+  margin-right: 4px;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.app-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.empty {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--mute);
+  padding: 6px 2px;
+}
+
+.silent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mute);
+  flex: none;
+}
+
+.silent-toggle .cnt {
+  margin-left: auto;
+}
+
+.foot {
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--mute);
+  border-top: 1px solid var(--line);
+  padding-top: 11px;
+}
+
+.foot .ic {
+  color: var(--mute);
+}
+
+/* Abas de dispositivo (saída padrão): segmentos pequenos com só o ícone. */
+.tabs-sm {
+  padding: 3px;
+  gap: 3px;
+  flex: none;
+}
+
+.tab-icon {
+  flex: none;
+  width: 38px;
+  height: 30px;
+}
+
+/* Barra de perfis. */
+.prof {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.ibtn.sel {
+  color: var(--brass);
+}
+
+.pslot.add .ibtn {
+  border-style: dashed;
+  background: transparent;
+}
+
+.pname {
+  margin-left: auto;
+  text-align: right;
+  min-width: 0;
+}
+
+.pname b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pname span {
+  display: block;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+/* Avisos do painel (roteamento indisponível, falha de gravação). */
+.banner {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid;
+  font-size: 12px;
+  line-height: 1.4;
+  flex: none;
+}
+
+.banner.warn {
+  color: var(--brass);
+  border-color: var(--brass-line);
+  background: var(--brass-wash);
+}
+
+.banner.error {
+  color: var(--danger);
+  border-color: var(--danger-line);
+  background: var(--danger-wash);
+}
+
+.banner small {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  color: var(--mute);
+  overflow-wrap: anywhere;
+}
+
+/* Medidor do microfone: 24 segmentos. */
+.meter {
+  display: flex;
+  gap: 3px;
+  flex: 1;
+}
+
+.meter i {
+  flex: 1;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--line);
+  display: block;
+}
+
+.meter i.l {
+  background: var(--live);
+}
+
+.meter-db {
+  width: 52px;
+  justify-content: flex-end;
+}
+
+/* Ícone do dispositivo padrão do microfone. */
+.tile {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border: 1px solid;
+}
+
+.tile.hs {
+  background: var(--brass-wash);
+  border-color: var(--brass-line);
+  color: var(--brass);
+}
+
+.tile.sg {
+  background: var(--sage-wash);
+  border-color: var(--sage-line);
+  color: var(--sage);
+}
+
+/* Botão de silenciar o microfone. Ligado = verde; silenciado = apagado. */
+.mute {
+  width: 100%;
+  height: 44px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--live);
+  background: rgba(143, 191, 122, 0.12);
+  border: 1px solid rgba(143, 191, 122, 0.45);
+}
+
+.mute.off {
+  color: var(--mute);
+  background: var(--card);
+  border-color: var(--line);
+}
+
+/* Menu de dispositivo (abre a partir do chip). */
+.dmenu {
+  position: relative;
+  flex: none;
+}
+
+.dmenu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  min-width: 200px;
+  max-width: 260px;
+  list-style: none;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+
+.dmenu-item {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.dmenu-item span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dmenu-item:hover {
+  background: var(--line);
+}
+
+.dmenu-item.on {
+  color: var(--brass);
+}
+
+/* Avisos curtos (toast): quadro sobre a parte de baixo do painel, sem tomar cliques. */
+.toasts {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.toast {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--danger-line);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Menu que abre para cima quando não cabe embaixo do chip. */
+.dmenu-list.up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/* Botões de ação do editor (mockup C: .btn.pri, .btn.sec). */
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn.pri {
+  flex: 1;
+  background: var(--brass);
+  border-color: var(--brass);
+  color: #1b1a18;
+}
+
+.btn.sec {
+  width: 112px;
+}
+
+.btn.danger {
+  color: var(--danger);
+  border-color: var(--danger-line);
+}
+
+/* Editor de perfil (mockup C). A coluna rola sozinha; o rodapé fica fixo. */
+.ed {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ed-top {
+  gap: 10px;
+}
+
+.ed-title {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.ed-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 2px;
+}
+
+.ed-head {
+  gap: 14px;
+  align-items: center;
+}
+
+.ed-big {
+  width: 70px;
+  height: 70px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--brass);
+  background: var(--brass-bg);
+  border: 1px solid var(--brass);
+  border-radius: 20px;
+  box-shadow: 0 0 0 4px var(--brass-ring);
+}
+
+.ed-namebox {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ed-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ed-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 11px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.ed-input:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}
+
+.ed-input.over {
+  border-color: var(--danger);
+}
+
+.ed-count {
+  flex: none;
+  font-style: normal;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+.ed-count.over {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.ed-err {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.ed-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.ed-icons {
+  display: flex;
+  gap: 6px;
+}
+
+.ed-icons .ibtn {
+  flex: 1;
+  width: auto;
+}
+
+.ed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ed-pr {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 10px;
+}
+
+.ed-app {
+  gap: 10px;
+}
+
+.ed-appname {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ed-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 38px;
+}
+
+.ed-add {
+  width: 100%;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
+  border: 1.5px dashed var(--line);
+  border-radius: 12px;
+  color: var(--mute);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ed-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--mute);
+}
+
+.ed-link {
+  align-self: flex-end;
+  padding: 4px;
+  background: none;
+  border: 0;
+  color: var(--mute);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ed-danger {
+  align-self: flex-start;
+  padding: 4px 0;
+  background: none;
+  border: 0;
+  color: var(--danger);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ed-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--danger-line);
+  background: var(--danger-wash);
+  font-size: 13px;
+}
+
+.ed-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ed-confirm-actions .btn {
+  flex: 1;
+}
+
+.ed-foot {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+
+/* Seletor de app (dentro do editor). */
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+
+.picker-top {
+  display: flex;
+  gap: 8px;
+}
+
+.picker .btn {
+  height: 40px;
+  padding: 0 10px;
+  font-size: 12px;
+  flex: none;
+}
+
+.pick-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.pick {
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+}
+
+.pick:hover,
+.pick:focus-visible {
+  background: var(--panel);
+}
+
+/* ---- Dispositivos e configurações (Task 13): medidas de docs/mockups/D.html, D2.html e E.html. ---- */
+
+/* Abas do painel ocupam o resto da linha; a engrenagem fica na ponta. */
+.tabs-row {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Estado do cartão: verde quando conectado, apagado quando não. */
+.st {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--mute);
+}
+
+/* Conectado oculto: bolinha verde, texto apagado. Conectado visível: texto e bolinha verdes. */
+.st.live {
+  color: var(--live);
+}
+
+.st i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mute);
+  display: block;
+  flex: none;
+}
+
+.st.conn i {
+  background: var(--live);
+}
+
+/* Ícone de dispositivo desconectado ou oculto: apagado, como em D.html. */
+.tile.nt {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--mute);
+}
+
+.act {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* Ícones escolhidos para o dispositivo (38 px cada, sem esticar). */
+.dev-icons {
+  display: flex;
+  gap: 8px;
+}
+
+/* Restaurar nome original do Windows. */
+.rst {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+/* Troca do padrão: lista de dispositivos conectados. */
+.dev-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pick.on {
+  color: var(--brass);
+}
+
+.pick > span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Grupo de linhas (Configurações). */
+.grp {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.it {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  width: 100%;
+  text-align: left;
+}
+
+.it + .it {
+  border-top: 1px solid var(--line);
+}
+
+button.it:hover {
+  background: var(--panel);
+}
+
+.stile {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--mute);
+}
+
+.stile.brass {
+  color: var(--brass);
+}
+
+.it .tx {
+  flex: 1;
+  min-width: 0;
+}
+
+.it .tx b {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.it .tx span {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+.it .tx span.bad {
+  color: var(--danger);
+}
+
+/* Atalho: teclas em caixinha (Win, Alt, V). */
+.keys-btn {
+  display: flex;
+  gap: 5px;
+  flex: none;
+  min-height: 28px;
+  align-items: center;
+}
+
+.keys-btn:disabled {
+  opacity: 0.5;
+}
+
+.k {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.keys-hint {
+  font-size: 12px;
+  color: var(--brass);
+  white-space: nowrap;
+}
+
+/* Barras de rolagem discretas, no lugar das brancas do Windows. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(247, 244, 236, 0.18) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(247, 244, 236, 0.16);
+  border-radius: 6px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(247, 244, 236, 0.32);
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Chip dentro da linha de um app: encolhe com reticências e deixa espaço para o nome. */
+.row .chip {
+  max-width: 62%;
+}
