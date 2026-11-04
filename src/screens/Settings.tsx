@@ -6,6 +6,7 @@ import { useToast } from "../components/Toast";
 import { Toggle } from "../components/Toggle";
 import { useAppState } from "../store";
 import type { Settings as AppSettings } from "../types";
+import { UpdateSection } from "./UpdateSection";
 import {
   APP_NAME,
   APP_VERSION,
@@ -248,6 +249,8 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
           </button>
         </div>
       </div>
+
+      <UpdateSection />
 
       <div className="ed-sec">
         <div className="lbl">Sobre</div>

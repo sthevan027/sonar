@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Testes e build da interface
+    # Windows, como no desenvolvimento: o app é só Windows e a suíte foi rodada nele.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Instala dependências
+        run: bun install --frozen-lockfile
+      - name: Testes (Vitest)
+        run: bun run test
+      - name: Build (tsc + Vite)
+        run: bun run build
+
+  rust:
+    name: Testes do Rust
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # O `generate_context!` do Tauri exige a pasta dist/ (frontendDist) já construída.
+      - name: Instala dependências e gera dist/
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked

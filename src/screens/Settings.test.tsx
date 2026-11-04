@@ -16,6 +16,11 @@ vi.mock("../store", () => ({
 vi.mock("../api", () => ({
   getSettings: vi.fn(),
   saveSettings: vi.fn(async () => undefined),
+  pendingUpdate: vi.fn(async () => null),
+  onUpdateAvailable: vi.fn(async () => () => {}),
+  onUpdateProgress: vi.fn(async () => () => {}),
+  checkForUpdate: vi.fn(async () => null),
+  installUpdate: vi.fn(async () => undefined),
 }));
 
 function settings(overrides: Partial<AppSettings> = {}): AppSettings {

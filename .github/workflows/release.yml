@@ -1,0 +1,60 @@
+name: Release
+
+# Tag v*: gera o instalador do Windows, assina com a chave do updater e publica o release com
+# o latest.json (é esse arquivo que o app lê para saber se há versão nova). Ver docs/RELEASE.md.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Confere se a versão dos arquivos bate com a tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            python tools/bump_version.py --check "$RELEASE_TAG"
+          else
+            python tools/bump_version.py --check
+          fi
+
+      - name: Instala dependências
+        run: bun install --frozen-lockfile
+
+      - name: Gera o instalador, assina e publica o release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: bun run tauri
+          tagName: v__VERSION__
+          releaseName: "Sonar v__VERSION__"
+          releaseBody: "Instalador para Windows, assinado. O Sonar avisa quando há versão nova; a atualização só é instalada quando você aperta \"Atualizar e reiniciar\" em Configurações."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true

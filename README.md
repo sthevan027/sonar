@@ -27,6 +27,8 @@ Testes que tocam no áudio real do PC são `#[ignore]` (rodam com `cargo test --
 
 Build de instalador (`bun run tauri build`) pede bastante memória; nesta versão ainda não foi rodado de ponta a ponta (ver `docs/VERIFICACAO.md`).
 
+Atualizações: o app avisa quando há versão nova (ponto na engrenagem) e instala só quando você aperta o botão em Configurações > Atualizações. Para publicar uma versão (tag `v*`, chave de assinatura e visibilidade do repositório), veja [`docs/RELEASE.md`](docs/RELEASE.md).
+
 ### Não testado nesta versão
 
 - Windows 10 (o roteamento usa a variante antiga da interface de política de áudio, sem teste real).

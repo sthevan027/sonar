@@ -1284,3 +1284,110 @@ button.it:hover {
 .row .chip {
   max-width: 62%;
 }
+
+/* ---- Atualizações (Configurações > Atualizações) e ponto na engrenagem ---- */
+.gear-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.gear-dot {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--brass);
+  box-shadow: 0 0 0 2px var(--panel);
+  pointer-events: none;
+}
+.upd-btn,
+.upd-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  padding: 7px 11px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.upd-btn {
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.upd-primary {
+  background: var(--brass);
+  border: 1px solid var(--brass);
+  color: var(--bg);
+  font-weight: 600;
+}
+.upd-btn:disabled,
+.upd-primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.upd-btn:focus-visible,
+.upd-primary:focus-visible {
+  outline: 2px solid var(--brass);
+  outline-offset: 2px;
+}
+.upd-detail {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.upd-detail .tx {
+  min-width: 0;
+  flex: 1 1 200px;
+}
+.upd-detail .upd-primary {
+  margin-left: auto;
+}
+.upd-notes {
+  margin: 6px 0 0;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-text);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mute);
+}
+.upd-bar {
+  position: relative;
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+.upd-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--brass);
+  transition: width 150ms linear;
+}
+.upd-bar[aria-busy="true"] span {
+  animation: upd-indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes upd-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .upd-bar[aria-busy="true"] span {
+    animation: none;
+    width: 100% !important;
+    opacity: 0.4;
+  }
+}
+.upd-error {
+  margin: 8px 12px 10px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+}

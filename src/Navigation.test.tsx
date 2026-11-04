@@ -23,6 +23,11 @@ vi.mock("./api", () => ({
   saveSettings: vi.fn(async () => undefined),
   onMicLevel: vi.fn(async () => () => {}),
   appIcon: vi.fn(async () => null),
+  pendingUpdate: vi.fn(async () => null),
+  onUpdateAvailable: vi.fn(async () => () => {}),
+  onUpdateProgress: vi.fn(async () => () => {}),
+  checkForUpdate: vi.fn(async () => null),
+  installUpdate: vi.fn(async () => undefined),
 }));
 
 afterEach(() => cleanup());
