@@ -12,6 +12,7 @@
 //! de dados: é a parte lenta. Escolher a saída de um app não relê nada: aplica a regra às
 //! sessões já conhecidas daquele app e atualiza só elas.
 
+use crate::actions::{ActionResult, ErrorCode, audio_failure};
 use crate::audio::default_device::DefaultDevice;
 use crate::audio::endpoint::{clamp_volume, EndpointControl};
 use crate::audio::types::{AudioError, AudioSession, AudioSource, Device, DeviceId, Flow, RouteBackend};
@@ -38,6 +39,16 @@ impl Default for Level {
             muted: false,
         }
     }
+}
+
+/// Como o mudo da saída padrão deve ser aplicado.
+#[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MuteMode {
+    /// Deixa a saída no estado pedido.
+    Set(bool),
+    /// Inverte o estado atual da saída.
+    Toggle,
 }
 
 /// Estado mutável, sempre acessado sob o travamento `inner` do `Engine`.
@@ -339,14 +350,37 @@ impl Engine {
 
     /// Mudo do endpoint. Mesmo fluxo de `set_device_volume`.
     pub fn set_device_muted(&self, id: &DeviceId, m: bool) -> Result<(), AudioError> {
-        self.ctl.set_muted(id, m)?;
-        {
-            let mut inner = self.lock();
-            inner.generation += 1;
-            inner.levels.entry(id.0.clone()).or_default().muted = m;
+        self.write_device_muted(id, m)
+    }
+
+    /// Liga, desliga ou inverte o mudo da saída padrão. Segura `apply` durante todo o
+    /// método: duas ações de mudo não podem se cruzar. O estado do mudo é lido na hora (o
+    /// valor guardado pode ser velho) e a escrita só acontece quando o valor muda.
+    #[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
+    pub fn act_output_mute(&self, mode: MuteMode) -> ActionResult {
+        let _apply = guard(&self.apply);
+        let Some(id) = self.default_render() else {
+            return ActionResult::failed(
+                ErrorCode::NoOutputDevice,
+                "Não há saída padrão conectada.",
+            );
+        };
+        let current = match self.ctl.muted(&id) {
+            Ok(muted) => muted,
+            Err(err) => return audio_failure(&err),
+        };
+        let target = match mode {
+            MuteMode::Set(muted) => muted,
+            MuteMode::Toggle => !current,
+        };
+        if target == current {
+            // Já está do jeito pedido: nada muda e ninguém é avisado.
+            return ActionResult::done(false, Some(id.0));
         }
-        self.emit();
-        Ok(())
+        if let Err(err) = self.write_device_muted(&id, target) {
+            return audio_failure(&err);
+        }
+        ActionResult::done(true, Some(id.0))
     }
 
     /// Troca o padrão do Windows no sentido.
@@ -372,7 +406,6 @@ impl Engine {
     }
 
     /// Saída padrão conectada, do último sincronismo. Não toca no sistema.
-    #[allow(dead_code)] // Tarefas seguintes (F1) consomem este resolvedor; até lá só os testes o usam.
     pub fn default_render(&self) -> Option<DeviceId> {
         self.lock()
             .devices
@@ -502,6 +535,19 @@ impl Engine {
         }
     }
 
+    /// Escreve o mudo no endpoint e guarda o valor novo. Não segura `apply`: quem chama
+    /// (`act_output_mute`) já segura.
+    fn write_device_muted(&self, id: &DeviceId, m: bool) -> Result<(), AudioError> {
+        self.ctl.set_muted(id, m)?;
+        {
+            let mut inner = self.lock();
+            inner.generation += 1;
+            inner.levels.entry(id.0.clone()).or_default().muted = m;
+        }
+        self.emit();
+        Ok(())
+    }
+
     /// Monta o estado e avisa a interface. Só o `emit` é segurado: estados saem na ordem em que foram montados.
     fn emit(&self) {
         let _emit = guard(&self.emit);
@@ -627,6 +673,7 @@ fn build_state(inner: &Inner) -> AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actions::ErrorCode;
     use crate::audio::default_device::DefaultDevice;
     use crate::audio::endpoint::EndpointControl;
     use crate::audio::types::{AudioError, AudioSession, Device};
@@ -779,6 +826,8 @@ mod tests {
         fail_reads: AtomicBool,
         /// Escritas falham quando verdadeiro; a chamada continua gravada.
         fail_writes: AtomicBool,
+        /// O endpoint sumiu: ler o mudo dele devolve `Gone`.
+        gone: AtomicBool,
         /// Leituras feitas (volume, mudo, pico), para provar que a escolha de rota não as repete.
         reads: AtomicUsize,
     }
@@ -833,10 +882,16 @@ mod tests {
         }
         fn muted(&self, id: &DeviceId) -> Result<bool, AudioError> {
             self.read_guard()?;
+            if self.gone.load(Ordering::SeqCst) {
+                return Err(AudioError::Gone);
+            }
             Ok(self.mutes.lock().unwrap().get(&id.0).copied().unwrap_or(false))
         }
         fn set_muted(&self, id: &DeviceId, m: bool) -> Result<(), AudioError> {
             self.record(CtlCall::SetMuted(id.0.clone(), m))?;
+            if self.gone.load(Ordering::SeqCst) {
+                return Err(AudioError::Gone);
+            }
             self.mutes.lock().unwrap().insert(id.0.clone(), m);
             Ok(())
         }
@@ -1578,6 +1633,124 @@ mod tests {
         );
         assert!(engine.state().devices[0].muted);
         assert_eq!(world.notes(), before + 1);
+    }
+
+    #[test]
+    fn set_mute_twice_changes_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        engine.refresh();
+        let before = world.notes();
+
+        let first = engine.act_output_mute(MuteMode::Set(true));
+        let second = engine.act_output_mute(MuteMode::Set(true));
+
+        assert!(first.ok);
+        assert!(first.changed);
+        assert_eq!(first.resolved.as_deref(), Some("fone"));
+        assert!(second.ok);
+        assert!(!second.changed);
+        // O mudo já estava ligado: a segunda chamada não escreve nada.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetMuted("fone".to_string(), true)]
+        );
+        assert!(engine.state().devices[0].muted);
+        assert_eq!(world.notes(), before + 1);
+    }
+
+    #[test]
+    fn toggle_reads_fresh_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        // O endpoint chega mudo de fora do app.
+        world.ctl.set_mute_of("fone", true);
+        engine.refresh();
+        let before = world.notes();
+
+        let first = engine.act_output_mute(MuteMode::Toggle);
+
+        assert!(first.ok);
+        assert!(first.changed);
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetMuted("fone".to_string(), false)]
+        );
+
+        // Mudança por fora, entre as duas chamadas: o toggle relê o endpoint, não o estado guardado.
+        world.ctl.set_mute_of("fone", true);
+        let second = engine.act_output_mute(MuteMode::Toggle);
+
+        assert!(second.ok);
+        assert!(second.changed);
+        assert_eq!(
+            world.ctl.calls(),
+            vec![
+                CtlCall::SetMuted("fone".to_string(), false),
+                CtlCall::SetMuted("fone".to_string(), false),
+            ]
+        );
+        assert_eq!(world.notes(), before + 2);
+    }
+
+    #[test]
+    fn mute_without_default_output_fails_without_emit() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        // Nenhum dispositivo é o padrão do Windows.
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        engine.refresh();
+        let before = world.notes();
+
+        let result = engine.act_output_mute(MuteMode::Set(true));
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::NoOutputDevice));
+        assert!(!result.changed);
+        assert_eq!(result.resolved, None);
+        assert!(world.ctl.calls().is_empty());
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn mute_on_gone_device_returns_device_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        engine.refresh();
+        let before = world.notes();
+        let state_before = engine.state();
+        world.ctl.gone.store(true, Ordering::SeqCst);
+
+        let result = engine.act_output_mute(MuteMode::Set(true));
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::DeviceGone));
+        assert!(!result.changed);
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        assert_eq!(
+            engine.state().devices[0].muted,
+            state_before.devices[0].muted
+        );
+        assert_eq!(world.notes(), before);
     }
 
     #[test]
