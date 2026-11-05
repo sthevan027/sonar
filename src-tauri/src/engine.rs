@@ -371,6 +371,41 @@ impl Engine {
             .map(|d| d.id.clone())
     }
 
+    /// Saída padrão conectada, do último sincronismo. Não toca no sistema.
+    #[allow(dead_code)] // Tarefas seguintes (F1) consomem este resolvedor; até lá só os testes o usam.
+    pub fn default_render(&self) -> Option<DeviceId> {
+        self.lock()
+            .devices
+            .iter()
+            .find(|d| d.flow == Flow::Render && d.is_default && d.connected)
+            .map(|d| d.id.clone())
+    }
+
+    /// Pids das sessões de um app no sentido, do último sincronismo. O nome do
+    /// executável é comparado sem diferenciar caixa.
+    #[allow(dead_code)] // Tarefas seguintes (F1) consomem este resolvedor; até lá só os testes o usam.
+    pub fn session_pids(&self, exe: &str, flow: Flow) -> Vec<u32> {
+        self.lock()
+            .sessions
+            .iter()
+            .filter(|s| s.flow == flow && s.exe.eq_ignore_ascii_case(exe))
+            .map(|s| s.pid)
+            .collect()
+    }
+
+    /// Saídas conectadas e visíveis, na ordem dos dispositivos. É a ordem do painel.
+    #[allow(dead_code)] // Tarefas seguintes (F1) consomem este resolvedor; até lá só os testes o usam.
+    pub fn visible_outputs(&self) -> Vec<DeviceId> {
+        let inner = self.lock();
+        inner
+            .devices
+            .iter()
+            .filter(|d| d.flow == Flow::Render && d.connected)
+            .filter(|d| !inner.meta.get(&d.id.0).map(|m| m.hidden).unwrap_or(false))
+            .map(|d| d.id.clone())
+            .collect()
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         guard(&self.inner)
     }
@@ -1673,6 +1708,84 @@ mod tests {
         }]);
         engine.refresh();
         assert_eq!(engine.default_capture(), None);
+    }
+
+    #[test]
+    fn default_render_is_the_connected_default_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let fone = Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        };
+        world.source.set_devices(vec![
+            device("alto", Flow::Render, true, "Alto"),
+            fone.clone(),
+            Device {
+                is_default: true,
+                ..device("mic", Flow::Capture, true, "Microfone")
+            },
+        ]);
+        engine.refresh();
+        assert_eq!(engine.default_render(), Some(dev_id("fone")));
+
+        // Padrão desconectado não conta: não há saída padrão ativa.
+        world.source.set_devices(vec![Device {
+            connected: false,
+            ..fone
+        }]);
+        engine.refresh();
+        assert_eq!(engine.default_render(), None);
+    }
+
+    #[test]
+    fn session_pids_matches_exe_case_insensitively_per_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world.source.set_sessions(vec![
+            session(10, "discord.exe", Flow::Render, "fone"),
+            session(11, "Discord.EXE", Flow::Render, "fone"),
+            session(12, "discord.exe", Flow::Capture, "mic"),
+        ]);
+        engine.refresh();
+
+        assert_eq!(engine.session_pids("Discord.exe", Flow::Render), vec![10, 11]);
+        assert_eq!(engine.session_pids("discord.exe", Flow::Capture), vec![12]);
+    }
+
+    #[test]
+    fn visible_outputs_skips_hidden_and_disconnected_keeping_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![
+            device("um", Flow::Render, true, "Um"),
+            device("dois", Flow::Render, true, "Dois"),
+            device("tres", Flow::Render, true, "Tres"),
+        ]);
+        engine.refresh();
+        assert_eq!(
+            engine.visible_outputs(),
+            vec![dev_id("um"), dev_id("dois"), dev_id("tres")]
+        );
+
+        // "Dois" some por estar oculto; "Tres" some por estar desconectado.
+        engine
+            .update_device_meta(&dev_id("dois"), "Dois", None, true)
+            .unwrap();
+        world.source.set_devices(vec![
+            device("um", Flow::Render, true, "Um"),
+            device("dois", Flow::Render, true, "Dois"),
+            device("tres", Flow::Render, false, "Tres"),
+        ]);
+        engine.refresh();
+
+        assert_eq!(engine.visible_outputs(), vec![dev_id("um")]);
     }
 
     #[test]
