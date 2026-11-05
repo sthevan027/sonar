@@ -1,5 +1,7 @@
 mod shell;
 mod shell_geometry;
+#[allow(dead_code)] // Tarefas seguintes (F1) consomem os tipos de ação; até lá só os testes os usam.
+mod actions;
 #[allow(dead_code)] // Tasks seguintes consomem o roteador; até lá só os testes o usam.
 mod audio;
 #[allow(dead_code)] // Task 9 consome as regras; até lá só os testes o usam.
