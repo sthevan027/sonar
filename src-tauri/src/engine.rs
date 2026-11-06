@@ -51,6 +51,20 @@ pub enum MuteMode {
     Toggle,
 }
 
+/// Diferença mínima para o volume contar como mudado. Abaixo disso, o endpoint já está
+/// no valor pedido e a escrita é desnecessária.
+const VOLUME_EPSILON: f32 = 0.0001;
+
+/// Como o volume da saída padrão deve ser aplicado.
+#[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VolumeMode {
+    /// Soma um valor ao volume atual da saída.
+    Step(f32),
+    /// Define o volume da saída de forma absoluta.
+    Set(f32),
+}
+
 /// Estado mutável, sempre acessado sob o travamento `inner` do `Engine`.
 struct Inner {
     devices: Vec<Device>,
@@ -338,14 +352,7 @@ impl Engine {
 
     /// Volume do endpoint. Não relê o sistema: atualiza o valor guardado e avisa a interface.
     pub fn set_device_volume(&self, id: &DeviceId, v: f32) -> Result<(), AudioError> {
-        self.ctl.set_volume(id, v)?;
-        {
-            let mut inner = self.lock();
-            inner.generation += 1;
-            inner.levels.entry(id.0.clone()).or_default().volume = clamp_volume(v);
-        }
-        self.emit();
-        Ok(())
+        self.write_device_volume(id, v)
     }
 
     /// Mudo do endpoint. Mesmo fluxo de `set_device_volume`.
@@ -378,6 +385,47 @@ impl Engine {
             return ActionResult::done(false, Some(id.0));
         }
         if let Err(err) = self.write_device_muted(&id, target) {
+            return audio_failure(&err);
+        }
+        ActionResult::done(true, Some(id.0))
+    }
+
+    /// Soma ou define o volume da saída padrão. Segura `apply` durante todo o método: duas
+    /// ações de volume não podem se cruzar. O volume é lido na hora (o valor guardado pode
+    /// ser velho) e a escrita só acontece quando o valor muda de verdade.
+    #[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
+    pub fn act_output_volume(&self, mode: VolumeMode) -> ActionResult {
+        let _apply = guard(&self.apply);
+        // Valor não finito é recusado antes de olhar o sistema: nada é tocado.
+        let requested = match mode {
+            VolumeMode::Step(delta) => delta,
+            VolumeMode::Set(value) => value,
+        };
+        if !requested.is_finite() {
+            return ActionResult::failed(
+                ErrorCode::InvalidValue,
+                "O valor de volume pedido não é válido.",
+            );
+        }
+        let Some(id) = self.default_render() else {
+            return ActionResult::failed(
+                ErrorCode::NoOutputDevice,
+                "Não há saída padrão conectada.",
+            );
+        };
+        let current = match self.ctl.volume(&id) {
+            Ok(volume) => volume,
+            Err(err) => return audio_failure(&err),
+        };
+        let target = match mode {
+            VolumeMode::Step(delta) => clamp_volume(current + delta),
+            VolumeMode::Set(value) => clamp_volume(value),
+        };
+        if (target - current).abs() <= VOLUME_EPSILON {
+            // Já está do jeito pedido: nada muda e ninguém é avisado.
+            return ActionResult::done(false, Some(id.0));
+        }
+        if let Err(err) = self.write_device_volume(&id, target) {
             return audio_failure(&err);
         }
         ActionResult::done(true, Some(id.0))
@@ -543,6 +591,19 @@ impl Engine {
             let mut inner = self.lock();
             inner.generation += 1;
             inner.levels.entry(id.0.clone()).or_default().muted = m;
+        }
+        self.emit();
+        Ok(())
+    }
+
+    /// Escreve o volume no endpoint e guarda o valor novo. Não segura `apply`: quem chama
+    /// (`act_output_volume`) já segura.
+    fn write_device_volume(&self, id: &DeviceId, v: f32) -> Result<(), AudioError> {
+        self.ctl.set_volume(id, v)?;
+        {
+            let mut inner = self.lock();
+            inner.generation += 1;
+            inner.levels.entry(id.0.clone()).or_default().volume = clamp_volume(v);
         }
         self.emit();
         Ok(())
@@ -1750,6 +1811,151 @@ mod tests {
             engine.state().devices[0].muted,
             state_before.devices[0].muted
         );
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn step_volume_clamps_and_reports_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        world.ctl.set_volume_of("fone", 0.98);
+        engine.refresh();
+        let before = world.notes();
+
+        let result = engine.act_output_volume(VolumeMode::Step(0.05));
+
+        assert!(result.ok);
+        assert!(result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("fone"));
+        // 0,98 + 0,05 passa de 1: o valor gravado é o limite.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetVolume("fone".to_string(), 1.0)]
+        );
+        assert_eq!(engine.state().devices[0].volume, 1.0);
+        assert_eq!(world.notes(), before + 1);
+    }
+
+    #[test]
+    fn step_at_limit_is_not_a_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        world.ctl.set_volume_of("fone", 1.0);
+        engine.refresh();
+        let before = world.notes();
+
+        let high = engine.act_output_volume(VolumeMode::Step(0.05));
+
+        assert!(high.ok);
+        assert!(!high.changed);
+        assert_eq!(world.notes(), before);
+
+        world.ctl.set_volume_of("fone", 0.0);
+        engine.refresh();
+        let before_low = world.notes();
+
+        let low = engine.act_output_volume(VolumeMode::Step(-0.05));
+
+        assert!(low.ok);
+        assert!(!low.changed);
+        // Nos dois limites o endpoint não foi escrito e ninguém foi avisado.
+        assert!(world.ctl.calls().is_empty());
+        assert_eq!(world.notes(), before_low);
+    }
+
+    #[test]
+    fn set_volume_is_absolute_and_clamped() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        world.ctl.set_volume_of("fone", 0.5);
+        engine.refresh();
+        let before = world.notes();
+
+        let high = engine.act_output_volume(VolumeMode::Set(1.7));
+
+        assert!(high.ok);
+        assert!(high.changed);
+
+        let low = engine.act_output_volume(VolumeMode::Set(-1.0));
+
+        assert!(low.ok);
+        assert!(low.changed);
+        // O valor pedido é absoluto: o que está gravado não entra na conta.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![
+                CtlCall::SetVolume("fone".to_string(), 1.0),
+                CtlCall::SetVolume("fone".to_string(), 0.0),
+            ]
+        );
+        assert_eq!(engine.state().devices[0].volume, 0.0);
+        assert_eq!(world.notes(), before + 2);
+    }
+
+    #[test]
+    fn non_finite_volume_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        engine.refresh();
+        let before = world.notes();
+        let reads_before = world.ctl.reads();
+
+        let nan = engine.act_output_volume(VolumeMode::Step(f32::NAN));
+        let infinite = engine.act_output_volume(VolumeMode::Set(f32::INFINITY));
+
+        assert!(!nan.ok);
+        assert_eq!(nan.error_code, Some(ErrorCode::InvalidValue));
+        assert!(!nan.changed);
+        assert!(!infinite.ok);
+        assert_eq!(infinite.error_code, Some(ErrorCode::InvalidValue));
+        assert!(!infinite.changed);
+        let message = nan.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // O valor inválido é recusado antes de falar com o endpoint.
+        assert!(world.ctl.calls().is_empty());
+        assert_eq!(world.ctl.reads(), reads_before);
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn volume_without_default_output_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        // Nenhum dispositivo é o padrão do Windows.
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        engine.refresh();
+        let before = world.notes();
+
+        let result = engine.act_output_volume(VolumeMode::Step(0.05));
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::NoOutputDevice));
+        assert!(!result.changed);
+        assert_eq!(result.resolved, None);
+        assert!(world.ctl.calls().is_empty());
         assert_eq!(world.notes(), before);
     }
 
