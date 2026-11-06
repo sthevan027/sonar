@@ -888,8 +888,12 @@ mod tests {
         fail_reads: AtomicBool,
         /// Escritas falham quando verdadeiro; a chamada continua gravada.
         fail_writes: AtomicBool,
-        /// O endpoint sumiu: ler o mudo dele devolve `Gone` e escrever nele também falha.
+        /// O endpoint sumiu: ler o mudo dele devolve `Gone` e escrever o mudo nele também falha.
         gone: AtomicBool,
+        /// Porta só de teste: avisa que a chamada chegou no backend e a segura parada até o
+        /// teste liberar. Vazia (padrão) = a chamada passa direto.
+        gate_chegou: Mutex<Option<mpsc::Sender<()>>>,
+        gate_liberar: Mutex<Option<mpsc::Receiver<()>>>,
         /// Leituras feitas (volume, mudo, pico), para provar que a escolha de rota não as repete.
         reads: AtomicUsize,
     }
@@ -930,6 +934,26 @@ mod tests {
             }
             Ok(())
         }
+
+        /// Posta a porta de teste: a próxima leitura avisa em `chegou` e fica parada
+        /// esperando a permissão de `liberar`.
+        fn set_gate(&self, chegou: mpsc::Sender<()>, liberar: mpsc::Receiver<()>) {
+            *self.gate_chegou.lock().unwrap() = Some(chegou);
+            *self.gate_liberar.lock().unwrap() = Some(liberar);
+        }
+
+        /// Estaciona a chamada dentro da porta, se houver uma posta. Sem porta, passa direto.
+        /// A porta é de uso único: a primeira chamada que chega é a que para.
+        fn wait_gate(&self) {
+            let chegou = self.gate_chegou.lock().unwrap().take();
+            let liberar = self.gate_liberar.lock().unwrap().take();
+            let (Some(chegou), Some(liberar)) = (chegou, liberar) else {
+                return;
+            };
+            // Avisa que chegou e espera a permissão do teste.
+            let _ = chegou.send(());
+            let _ = liberar.recv();
+        }
     }
 
     impl EndpointControl for FakeCtl {
@@ -943,6 +967,9 @@ mod tests {
             Ok(())
         }
         fn muted(&self, id: &DeviceId) -> Result<bool, AudioError> {
+            // A porta de teste (quando posta) segura a chamada aqui, com a trava `apply` do
+            // chamador ainda na mão: é o ponto exato em que a exclusão mútua pode ser provada.
+            self.wait_gate();
             self.read_guard()?;
             if self.gone.load(Ordering::SeqCst) {
                 return Err(AudioError::Gone);
@@ -1829,6 +1856,7 @@ mod tests {
         }]);
         engine.refresh();
         let state_before = engine.state();
+        let gen_before = engine.lock().generation;
         let before = world.notes();
         // A leitura do mudo funciona; a escrita é que o Windows recusa.
         world.ctl.fail_writes.store(true, Ordering::SeqCst);
@@ -1850,6 +1878,8 @@ mod tests {
             engine.state().devices[0].muted,
             state_before.devices[0].muted
         );
+        // A geração não sobe: nada foi mudado, então nenhum cache de leitura pode ser invalidado.
+        assert_eq!(engine.lock().generation, gen_before);
         assert_eq!(world.notes(), before);
     }
 
@@ -1863,36 +1893,44 @@ mod tests {
             ..device("fone", Flow::Render, true, "Fone")
         }]);
         engine.refresh();
+        let before = world.notes();
 
-        // A thread de teste segura `apply`: a ação não pode passar enquanto a trava existe.
-        let held = engine
-            .apply
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let (tx, rx) = std::sync::mpsc::channel();
+        // Porta do backend: a ação estaciona dentro de `ctl.muted()`, ou seja, parada com a
+        // trava `apply` na mão. Nada de janela de tempo: a prova é a posse da trava.
+        let (chegou_tx, chegou_rx) = mpsc::channel();
+        let (liberar_tx, liberar_rx) = mpsc::channel();
+        world.ctl.set_gate(chegou_tx, liberar_rx);
+
+        let (tx, rx) = mpsc::channel();
         let worker = Arc::clone(&engine);
         let handle = std::thread::spawn(move || {
             let _ = tx.send(worker.act_output_mute(MuteMode::Set(true)));
         });
 
-        // Com `apply` retido, o resultado não chega (a thread pode nem ter começado).
-        match rx.recv_timeout(Duration::from_millis(250)) {
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                panic!("a thread da ação morreu antes de devolver o resultado")
-            }
-            Ok(result) => panic!("a ação passou sem esperar a trava `apply`: {result:?}"),
-        }
+        // Espera positiva: se a ação não chegar no backend, o teste falha alto em vez de
+        // passar calado por falta de prova.
+        chegou_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a ação não chegou no backend");
 
-        // Solta a trava: a ação termina e devolve o resultado.
-        drop(held);
+        // A ação está parada dentro da leitura do mudo: ela tem que estar segurando `apply`.
+        assert!(
+            engine.apply.try_lock().is_err(),
+            "a ação não segurou `apply` enquanto lia o mudo"
+        );
+
+        // Libera a ação: ela termina e devolve o resultado.
+        liberar_tx
+            .send(())
+            .expect("a porta de teste já estava fechada");
         let result = rx
             .recv_timeout(Duration::from_secs(5))
-            .expect("a ação não terminou depois de `apply` ser solta");
+            .expect("a ação não terminou depois de a porta ser liberada");
         handle.join().unwrap();
         assert!(result.ok);
         assert!(result.changed);
         assert_eq!(result.resolved.as_deref(), Some("fone"));
+        assert_eq!(world.notes(), before + 1);
     }
 
     #[test]
