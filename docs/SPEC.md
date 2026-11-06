@@ -41,20 +41,27 @@
 
 ## 3. Comandos globais
 
-Convenções: toda ação devolve `{ ok, changed, resolved, error_code }` (design §4). A ação de atalho **não abre pop-up**; erro vai para evento ou notificação, porque o painel pode estar oculto.
+Convenções: toda ação devolve `{ ok, changed, resolved, error_code, message }` (design §4). A ação de atalho **não abre pop-up**; erro vai para evento ou notificação, porque o painel pode estar oculto.
+
+- **`ok` e `changed` são independentes.** `ok` = "a ação cumpriu o pedido inteiro"; `changed` = "o estado mudou de fato". Uma ação que cumpriu **só parte** do pedido devolve `ok: false` **e** `changed: true`, com o `error_code` e a `message` do primeiro erro — nunca `ok: true` com o erro escondido. `ok == false` **não** implica `changed == false`: o painel não pode descartar a atualização de estado só porque a ação falhou.
+- **A `message` de uma falha parcial diz as duas coisas** (o que mudou e o que falhou), para o usuário não ler "erro" e achar que nada aconteceu.
+- **`error_code`** é um de: `profile_not_found`, `no_profiles`, `no_output_device`, `not_enough_outputs`, `device_gone`, `unsupported`, `os_error`, `invalid_exe`, `invalid_value`, `queue_full`, `internal` (snake_case). `internal` é falha **do app** (ex.: pânico no executor), não recusa do Windows.
+- **O evento `action-result`** é emitido quando `ok == false` — é por ele que o aviso chega ao usuário, inclusive nos casos de sucesso parcial.
 
 | ID | Ação | Alvo | Atalho padrão | Comportamento esperado | Erro esperado |
 |---|---|---|---|---|---|
-| A2 | Ativar perfil `profile_id` | global | `Ctrl+Alt+1`, `Ctrl+Alt+2`… (um por perfil, proposta) | Aplica `profiles::activate`: rotas e regras dos apps listados | "Perfil não encontrado." (design: `commands.rs:126`). Roteamento indisponível: erro com código |
-| A3 | Próximo perfil (`direction: next \| prev`) | global | `Ctrl+Alt+P` (próximo, proposta) | Avança na ordem da lista de perfis, volta ao início no fim, e aplica (como A2) | Sem perfis: não faz nada, com aviso. Perfil atual apagado: vai ao primeiro |
+| A2 | Ativar perfil `profile_id` | global | Sem atalho semeado. O atalho é criado pelo usuário, como binding de perfil. **Proposta (Task 16):** a tela de Configurações sugere `Ctrl+Alt+1`…`Ctrl+Alt+9` para os perfis que ainda não têm binding | Aplica `profiles::activate`: rotas e regras dos apps listados | "Perfil não encontrado." (design: `commands.rs:126`). Roteamento indisponível: erro com código |
+| A3 | Próximo perfil (`direction: next \| prev`) | global | `Ctrl+Alt+P` (próximo, proposta) | Avança na ordem da lista de perfis, volta ao início no fim, e aplica (como A2) | Sem perfis: erro `no_profiles` (`ok: false`), com aviso ao usuário pelo evento `action-result`. Perfil atual apagado: vai ao primeiro |
 | A4 | Mudo da saída padrão (`muted: true \| false`) | saída padrão (render) | `Ctrl+Alt+M` (ver Q1) | Define o mudo do endpoint padrão | "O dispositivo não está mais disponível." (`Gone`) |
-| A6 | Volume da saída padrão, relativo (`delta`) | saída padrão | Sem padrão. Exemplo `Ctrl+Alt+↑/↓` com ±5%, só proposta (definir após S4) | Soma os deltas de uma rajada (coalescência) e aplica uma vez. Resultado com clamp 0 a 1 | Igual A4 |
-| A7 | Volume absoluto da saída padrão (`value`) | saída padrão | Sem padrão (definir após S4) | Define o volume; clamp 0 a 1; a última ação vence | Igual A4 |
+| A6 | Volume da saída padrão, relativo (`delta`) | saída padrão | `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (±0,05) — **provisionais até o S4** | Soma os deltas de uma rajada (coalescência) e aplica uma vez. Resultado com clamp 0 a 1 | Igual A4 |
+| A7 | Volume absoluto da saída padrão (`value`) | saída padrão | Sem padrão (definir após S4) | Define o volume; clamp 0 a 1; a última ação vence. Ressalva: dentro do epsilon de 0,0001 do valor atual, nada é gravado e `changed` é `false` — mesma regra de idempotência de `set` do RF-06/RF-14 | Igual A4 |
 | A8 | Mudo de app (`exe`, `muted`) | sessões de render do exe, todos os pids | Sem padrão (definir após S4) | Define o mudo de todas as sessões existentes do exe | Sem sessão ativa: `ok` com `changed: false`, não é erro. Exe inválido: erro de validação |
-| A9 | Mover app (`exe`, `device` ou "Padrão") | regra do exe | Sem padrão (definir após S4) | Igual `set_app_route`: grava a regra e aplica | "Este Windows não permite essa operação." (`Unsupported`). Dispositivo ausente: regra guardada, sem erro |
-| A10 | Próxima saída padrão (`direction`) | saídas conectadas e visíveis, na ordem do painel (proposta) | Sem padrão (definir após S4) | Troca o padrão para a próxima saída; volta à primeira no fim | Menos de 2 saídas: não faz nada, com aviso |
+| A9 | Mover app (`exe`, `device` ou "Padrão") | regra do exe | Sem padrão (definir após S4) | Igual `set_app_route`: grava a regra e aplica. **Proposta (Task 15):** o literal `"Padrão"` (ou `"Default"`) é normalizado para a saída padrão do Windows (dispositivo ausente) | "Este Windows não permite essa operação." (`Unsupported`). Dispositivo ausente: regra guardada, sem erro |
+| A10 | Próxima saída padrão (`direction`) | saídas conectadas e visíveis, na ordem do painel (proposta) | Sem padrão (definir após S4) | Troca o padrão para a próxima saída; volta à primeira no fim | Menos de 2 saídas: erro `not_enough_outputs` (`ok: false`), com aviso ao usuário pelo evento `action-result` |
 
 **Proposta sobre A9:** entra na F2, porque precisa de parâmetros por binding. O design não fixa a fase.
+
+**Ressalva sobre `routing_available`:** o campo `AppState.routing_available` é um **latch histórico** — ele fica `false` se alguma reconciliação esbarrou em `Unsupported` e só volta a `true` com um roteamento bem-sucedido. Ele **não** é o veredito de uma ação: a A2 decide pelo resultado do reconcile **daquela** ativação, para que uma falha antiga não produza um `unsupported` falso. A UI que mostrar esse campo precisa saber que ele pode estar `false` com o Windows aceitando roteamento.
 
 ---
 
@@ -78,10 +85,10 @@ Cada requisito tem um teste ou verificação manual indicado.
 | RF-12 | A10 troca para a próxima saída conectada e visível. Com uma saída só, não faz nada | Unitário: 3 saídas, uma oculta, o ciclo passa pelas 2 visíveis |
 | RF-13 | Atalhos funcionam com qualquer app em foco, sem rede e com o app de destino fechado (decisão do autor, design §11.1) | Manual (ver §9.3) |
 | RF-14 | Ações `set` são idempotentes. Ações não idempotentes (A3, A6, A10) informam `changed` no resultado | Unitário |
-| RF-15 | Trocar o atalho desregistra o antigo **antes** de registrar o novo | Manual + unitário com fake do plugin |
+| RF-15 | Trocar o atalho registra o **novo antes** de soltar o antigo. Se o registro do novo falhar, o antigo continua valendo (RF-17) | Manual + unitário com fake do plugin |
 | RF-16 | Validação antes de gravar: sintaxe do atalho, duplicata dentro do app recusada, tamanho máximo (proposta: 64 caracteres) | Unitário |
 | RF-17 | Troca falha: o atalho anterior continua valendo e a UI mostra o aviso. Na inicialização, binding que falha fica "indisponível" e os demais seguem | Manual (VERIFICACAO, "Atalho em uso") + unitário |
-| RF-18 | Binding apontando para perfil, dispositivo ou exe apagado: a ação devolve erro e o binding é mantido (não é removido sozinho) | Unitário |
+| RF-18 | Binding apontando para **perfil apagado** (`profile_not_found`) ou **exe inválido** (`invalid_exe`): a ação devolve erro e o binding é mantido (não é removido sozinho). Dispositivo ausente **não** é erro: a A9 guarda a regra e devolve `ok: true` (§3, A9) | Unitário |
 | RF-19 | Migração: `shortcut` legado vira binding `toggle_panel` na primeira leitura. O arquivo antigo fica em `.bak` | Unitário com arquivo de v1 real (manual) |
 | RF-20 | Os comandos IPC atuais (`set_*`) não mudam de contrato. O painel continua igual | Testes atuais + manual da F0 |
 
@@ -92,11 +99,11 @@ Cada requisito tem um teste ou verificação manual indicado.
 | ID | Requisito | Como verificar |
 |---|---|---|
 | RNF-01 | Nenhum COM nem lock de dados é segurado no handler do atalho | Revisão de código + RF-02 |
-| RNF-02 | Fila limitada (proposta: 64 ações). Fila cheia descarta com aviso e não trava | Unitário |
+| RNF-02 | Fila limitada (proposta: 64 ações). Fila cheia descarta com aviso e não trava. **Proposta (Task 8):** `Dispatcher::submit` devolve `SubmitError::Full` e todo ponto que chama `submit` trata o erro — `eprintln!` **e** aviso ao frontend (evento `action-result` com `ok: false`), para que o "aviso" exista de fato | Unitário, com o aviso chegando |
 | RNF-03 | Ordem de locks preservada: `apply` > `persist` > `emit` > `inner` (design §2.3). Nenhum lock novo de dados | Revisão de código |
 | RNF-04 | Idempotência: `set` repetido não gera escrita nem evento extra | RF-06 |
 | RNF-05 | Dispositivo sumido: erro tratado com `error_code`, o app segue usável, sem `unwrap` no caminho da ação | Unitário com fake que devolve `Gone` + manual (ver §9.3) |
-| RNF-06 | Contrato preservado: snapshot `AppState`, evento `state-changed`, contador `generation` (design §2.3) | Testes atuais |
+| RNF-06 | Contrato preservado: snapshot `AppState`, evento `state-changed`, contador `generation` (design §2.3). **Ressalva (proposta, Task 12):** `Settings.bindings` entra em `Settings`, que está dentro de `AppState` — o shape do snapshot muda por isso. O teste fixado `app_state_json_shape_is_pinned` é reescrito **de propósito**, com o campo novo escrito explicitamente e documentado no doc do teste | Testes atuais, mais o pin reescrito |
 | RNF-07 | Sem rede e sem telemetria (design §7) | Revisão |
 | RNF-08 | Mensagens de erro em português. Nada de código hexadecimal cru na mensagem do atalho (design §4) | Manual |
 | RNF-09 | Latência de execução do atalho: **não medida**. Medir na F1 no Win11 e registrar aqui. Sem meta até medir | Medição manual na F1 |
@@ -109,15 +116,15 @@ Modelo: `Settings.bindings: [{ accelerator, action }]`. `shortcut` continua send
 
 | Tema | Regra |
 |---|---|
-| Migração | `shortcut` vira `{ accelerator: shortcut, action: toggle_panel }` na primeira leitura. `.bak` antes de gravar (`store.rs:49-68`, design §7.2) |
-| Versão do Store | Hoje `CURRENT_VERSION = 1` (`store.rs:12`). **Proposta:** subir para 2, com a migração condicionada à versão (design §7.3) |
+| Migração | `shortcut` vira `{ accelerator: shortcut, action: toggle_panel }` na primeira leitura. **Proposta (Task 12):** a migração semeia também os atalhos padrão de mudo e volume (`Ctrl+Alt+M`, `Ctrl+Alt+↑`, `Ctrl+Alt+↓`), para o usuário não precisar recriá-los. `.bak` antes de gravar (`store.rs:49-68`, design §7.2) |
+| Versão do Store | `CURRENT_VERSION` sobe de 1 para 2 (`store.rs:12`), com a migração condicionada à versão (design §7.3). **Proposta (Task 12):** a migração só roda uma vez — abrir o app de novo não regrava nem duplica bindings |
 | Validação | Sintaxe, duplicata recusada, tamanho máximo (RF-16) |
-| Troca | Desregistrar o antigo antes de registrar o novo. **Hipótese** a confirmar na doc do plugin (design §6) |
+| Troca | Registrar o novo **antes** de soltar o antigo. Hipótese resolvida: o código existente já faz nessa ordem (`shell.rs:258-271`) e o RF-17 exige que o anterior continue valendo enquanto o novo é registrado. **Proposta (Task 13):** a troca por binding (`apply_bindings`) segue a mesma ordem |
 | Falha na troca | Mantém o anterior e mostra aviso (RF-17) |
 | Falha na inicialização | Binding fica "indisponível" com mensagem; os outros seguem (RF-17) |
-| Teclas reservadas pelo sistema | Hipótese de falha de registro (ex.: Win+L). **PENDENTE** S4 |
-| Interface de Configurações | Mockup E tem uma linha única "Atalho global". A lista de bindings, o estado "indisponível" e a edição de cada um **não têm desenho**. **PENDENTE:** desenhar no Doop antes da F2 (os mockups são vinculantes, design §3) |
-| Permissão Tauri | Se o comando IPC novo `dispatch_action` precisa de permissão explícita em Tauri v2. **PENDENTE** (design §6) |
+| Teclas reservadas pelo sistema | Hipótese de falha de registro (ex.: Win+L). **PENDENTE:** execução do S4 no Win11 build 26300. **Proposta (Task 9):** a sonda (registra e solta cada tecla, uma por vez) fica pronta antes do registro dos padrões, e os padrões seguem **provisionais** até o S4 |
+| Interface de Configurações | Mockup E tem uma linha única "Atalho global". A lista de bindings, o estado "indisponível" e a edição de cada um têm desenho: rascunho local de 62 KB (`bindings-screen-draft.html`, fora do repo), com a decisão **D1** — a linha "Atalho global" **convive** com a lista nova e **é** o binding `toggle_panel`, o primeiro da lista. **PENDENTE:** publicar no Doop e obter a aprovação do autor antes da F2 (os mockups são vinculantes, design §3) |
+| Permissão Tauri | Se o comando IPC novo `dispatch_action` precisa de permissão explícita em Tauri v2. **PENDENTE:** confirmar na Task 8 e registrar o achado em `sonar-system-design.md` §6 (design §6) |
 
 ---
 
@@ -215,6 +222,24 @@ Proposta: **não persistir**. O ciclo começa no primeiro perfil quando o app ab
 
 **Q3. Padrões de volume (`Ctrl+Alt+↑/↓`) e de A8, A9 e A10?**
 Proposta: deixar sem atalho padrão até o S4 (conflitos). Os padrões de perfil, mudo e ciclo de perfil continuam como estão no design.
+
+**Q1 a Q3 foram fechadas em 2026-11-05** (ver "Decisões fechadas" no plano da v1.1): Q1 — o atalho de mudo é toggle; Q2 — o cursor do ciclo não persiste; Q3 — volume tem padrão `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (±0,05), e A8, A9 e A10 ficam sem atalho padrão. As perguntas abaixo são as que só o autor pode responder agora.
+
+**Q4. O binding `toggle_panel` pode ficar sem atalho?**
+Proposta: **sim**. O `toggle_panel` pode ser removido como qualquer outro binding; a linha "Atalho global" do Mockup E passa a mostrar "Nenhum atalho. Toque para definir.". A alternativa (proibir a remoção) foi descartada: quem não quiser atalho global ficaria sem como desligar.
+Motivo: o desenho local tomou a decisão D3 e a marcou como pendente de confirmação. `Settings.shortcut` é o espelho do acelerador do `toggle_panel`, então a remoção tem que ser refletida nos dois lugares.
+
+**Q5. "Restaurar padrões" substitui a lista inteira ou só readiciona os que faltam?**
+Proposta: **substitui** a lista inteira pelos padrões, com confirmação inline. A alternativa descartada era só readicionar os que faltam.
+Motivo: decisão D4 do desenho, marcada como pendente de confirmação. Substituir é reversível por "Sugerir atalhos de perfil" e pelo botão de restore; readicionar deixa bindings obsoletos no lugar.
+
+**Q6. Setas entram na captura de atalho?**
+Proposta: **sim** — `ArrowUp`/`ArrowDown` viram `Up`/`Down` na captura, senão o usuário não consegue recapturar `Ctrl+Alt+↑/↓`.
+Motivo: hoje o `shortcutFromKeys` só aceita letras, números e F1–F12; setas caem em erro (achado do desenho). Depende do S4 e do que o plugin aceita.
+
+**Q7. O DESIGN da tela de bindings será aprovado?**
+Proposta: **aprovar** o rascunho local (`bindings-screen-draft.html`, 62 KB) e publicar no Doop antes da F2.
+Motivo: os mockups são vinculantes (design §3) e a publicação no Doop ficou pendente. A Task 16 vai ser implementada a partir do rascunho e entra no PR marcado como "aguardando aprovação visual".
 
 ---
 
