@@ -597,7 +597,7 @@ impl Engine {
     }
 
     /// Escreve o volume no endpoint e guarda o valor novo. Não segura `apply`: quem chama
-    /// (`act_output_volume`) já segura.
+    /// decide se segura (`act_output_volume` segura; `set_device_volume` não).
     fn write_device_volume(&self, id: &DeviceId, v: f32) -> Result<(), AudioError> {
         self.ctl.set_volume(id, v)?;
         {
@@ -1923,6 +1923,40 @@ mod tests {
     }
 
     #[test]
+    fn volume_reads_fresh_state_not_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        world.ctl.set_volume_of("fone", 0.98);
+        engine.refresh();
+        // Mudança por fora, depois do refresh: o endpoint passa a estar em 0,50, mas o
+        // estado guardado continua dizendo 0,98.
+        world.ctl.set_volume_of("fone", 0.50);
+        let stale = engine.state();
+        assert_eq!(stale.devices[0].volume, 0.98);
+        let reads_before = world.ctl.reads();
+
+        let result = engine.act_output_volume(VolumeMode::Step(0.05));
+
+        assert!(result.ok);
+        assert!(result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("fone"));
+        // A soma parte do valor lido na hora (0,50 + 0,05). Quem usasse o estado
+        // guardado somaria 0,98 + 0,05 e gravaria 1,0.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetVolume("fone".to_string(), 0.55)]
+        );
+        assert_eq!(engine.state().devices[0].volume, 0.55);
+        // Uma única leitura: a do próprio endpoint, no momento da ação.
+        assert_eq!(world.ctl.reads(), reads_before + 1);
+    }
+
+    #[test]
     fn step_at_limit_is_not_a_change() {
         let dir = tempfile::tempdir().unwrap();
         let world = World::new();
@@ -1934,16 +1968,21 @@ mod tests {
         world.ctl.set_volume_of("fone", 1.0);
         engine.refresh();
         let before = world.notes();
+        let reads_before = world.ctl.reads();
 
         let high = engine.act_output_volume(VolumeMode::Step(0.05));
 
         assert!(high.ok);
         assert!(!high.changed);
         assert_eq!(world.notes(), before);
+        // A leitura fresca acontece (é ela que diz que o valor já está no limite),
+        // mas é uma só: nada releu o endpoint uma segunda vez.
+        assert_eq!(world.ctl.reads(), reads_before + 1);
 
         world.ctl.set_volume_of("fone", 0.0);
         engine.refresh();
         let before_low = world.notes();
+        let reads_before_low = world.ctl.reads();
 
         let low = engine.act_output_volume(VolumeMode::Step(-0.05));
 
@@ -1952,6 +1991,7 @@ mod tests {
         // Nos dois limites o endpoint não foi escrito e ninguém foi avisado.
         assert!(world.ctl.calls().is_empty());
         assert_eq!(world.notes(), before_low);
+        assert_eq!(world.ctl.reads(), reads_before_low + 1);
     }
 
     #[test]
@@ -1967,6 +2007,17 @@ mod tests {
         engine.refresh();
         let before = world.notes();
 
+        // O valor pedido é absoluto: o que está gravado não entra na conta.
+        // Quem tratasse `Set` como soma gravaria 0,5 + 0,3 = 0,8.
+        let absolute = engine.act_output_volume(VolumeMode::Set(0.3));
+
+        assert!(absolute.ok);
+        assert!(absolute.changed);
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetVolume("fone".to_string(), 0.3)]
+        );
+
         let high = engine.act_output_volume(VolumeMode::Set(1.7));
 
         assert!(high.ok);
@@ -1976,16 +2027,49 @@ mod tests {
 
         assert!(low.ok);
         assert!(low.changed);
-        // O valor pedido é absoluto: o que está gravado não entra na conta.
+        // Os três pedidos: o absoluto de 0,3 e os dois limites.
         assert_eq!(
             world.ctl.calls(),
             vec![
+                CtlCall::SetVolume("fone".to_string(), 0.3),
                 CtlCall::SetVolume("fone".to_string(), 1.0),
                 CtlCall::SetVolume("fone".to_string(), 0.0),
             ]
         );
         assert_eq!(engine.state().devices[0].volume, 0.0);
-        assert_eq!(world.notes(), before + 2);
+        assert_eq!(world.notes(), before + 3);
+    }
+
+    #[test]
+    fn set_volume_to_current_value_is_not_a_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        world.ctl.set_volume_of("fone", 0.5);
+        engine.refresh();
+        let before = world.notes();
+
+        // Decisão, não acidente: pedir o volume que já está não muda nada e não
+        // grava (mesma regra do mudo, RF-06). O epsilon absorve o arredondamento.
+        let same = engine.act_output_volume(VolumeMode::Set(0.5));
+
+        assert!(same.ok);
+        assert!(!same.changed);
+        assert_eq!(same.resolved.as_deref(), Some("fone"));
+        assert!(world.ctl.calls().is_empty());
+        assert_eq!(world.notes(), before);
+
+        // Dentro do epsilon (0,0001): a mesma decisão.
+        let within = engine.act_output_volume(VolumeMode::Set(0.50004));
+
+        assert!(within.ok);
+        assert!(!within.changed);
+        assert!(world.ctl.calls().is_empty());
+        assert_eq!(world.notes(), before);
     }
 
     #[test]
@@ -2037,6 +2121,73 @@ mod tests {
         assert!(!result.changed);
         assert_eq!(result.resolved, None);
         assert!(world.ctl.calls().is_empty());
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn volume_read_failure_returns_os_error_without_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        world.ctl.set_volume_of("fone", 0.6);
+        engine.refresh();
+        let state_before = engine.state();
+        let before = world.notes();
+        // A leitura é que falha: ligada depois do refresh, senão o próprio refresh falha.
+        world.ctl.fail_reads.store(true, Ordering::SeqCst);
+
+        let result = engine.act_output_volume(VolumeMode::Step(0.05));
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::OsError));
+        assert!(!result.changed);
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // Sem leitura do volume não há escrita: o endpoint não foi tocado.
+        assert!(world.ctl.calls().is_empty());
+        assert_eq!(
+            engine.state().devices[0].volume,
+            state_before.devices[0].volume
+        );
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn volume_write_failure_keeps_state_and_returns_os_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        world.ctl.set_volume_of("fone", 0.5);
+        engine.refresh();
+        let state_before = engine.state();
+        let before = world.notes();
+        // A leitura do volume funciona; a escrita é que o Windows recusa.
+        world.ctl.fail_writes.store(true, Ordering::SeqCst);
+
+        let result = engine.act_output_volume(VolumeMode::Step(0.125));
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::OsError));
+        assert!(!result.changed);
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // A escrita foi tentada e falhou: nada de estado guardado, nada de aviso.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetVolume("fone".to_string(), 0.625)]
+        );
+        assert_eq!(
+            engine.state().devices[0].volume,
+            state_before.devices[0].volume
+        );
         assert_eq!(world.notes(), before);
     }
 
