@@ -13,6 +13,7 @@
 //! sessões já conhecidas daquele app e atualiza só elas.
 
 use crate::actions::{ActionResult, ErrorCode, audio_failure};
+use crate::apps::{ExeRequest, parse_exe_request};
 use crate::audio::default_device::DefaultDevice;
 use crate::audio::endpoint::{clamp_volume, EndpointControl};
 use crate::audio::types::{AudioError, AudioSession, AudioSource, Device, DeviceId, Flow, RouteBackend};
@@ -431,6 +432,73 @@ impl Engine {
         ActionResult::done(true, Some(id.0))
     }
 
+    /// Liga ou desliga o mudo de um app, pelo nome do executável (ex.: `spotify.exe`).
+    /// Vale para todas as sessões de saída desse app: uma sessão que já encerrou não
+    /// interrompe as outras. Sem sessão do app, a ação dá certo sem mudar nada.
+    ///
+    /// As sessões são lidas na hora (`source.sessions()`), não do snapshot guardado: um app
+    /// que acabou de abrir ainda não está no cache, e mudá-lo pelo pid errado é o pior erro
+    /// possível aqui.
+    #[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
+    pub fn act_app_mute(&self, exe: &str, muted: bool) -> ActionResult {
+        // Pedido inválido é recusado antes de qualquer leitura: nada é tocado.
+        let Some(request) = parse_exe_request(exe) else {
+            return ActionResult::failed(
+                ErrorCode::InvalidExe,
+                "O nome do aplicativo não é válido.",
+            );
+        };
+        let key = exe_key(request);
+        let sessions = match self.source.sessions() {
+            Ok(sessions) => sessions,
+            Err(err) => return audio_failure(&err),
+        };
+        // Só a saída do app: o microfone está fora de escopo.
+        let targets: Vec<&AudioSession> = sessions
+            .iter()
+            .filter(|s| s.flow == Flow::Render && s.exe.eq_ignore_ascii_case(&key))
+            .collect();
+        // Sem sessão do app: não é erro, é só não ter o que mudar.
+        if targets.is_empty() {
+            return ActionResult::done(false, Some(key));
+        }
+        // Já está do jeito pedido: nada muda e ninguém é avisado.
+        if !targets.iter().any(|s| s.muted != muted) {
+            return ActionResult::done(false, Some(key));
+        }
+        let mut first_error: Option<AudioError> = None;
+        let mut changed = false;
+        {
+            // `apply` é segurado só enquanto as sessões são mudadas. O `refresh()` adquire
+            // `apply` por conta própria: chamá-lo com a trava na mão seria um deadlock.
+            let _apply = guard(&self.apply);
+            for session in &targets {
+                match self.ctl.set_session_muted(session.pid, Flow::Render, muted) {
+                    Ok(()) => changed = true,
+                    // Uma sessão que sumiu não impede as outras.
+                    Err(err) => {
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
+                    }
+                }
+            }
+            if changed {
+                // Mudança do usuário: invalida a leitura que estiver em andamento.
+                self.lock().generation += 1;
+            }
+        }
+        if !changed {
+            return match first_error {
+                Some(err) => audio_failure(&err),
+                None => ActionResult::failed(ErrorCode::OsError, "O Windows recusou a operação."),
+            };
+        }
+        // Fora do escopo da trava: o refresh já avisa a interface.
+        self.refresh();
+        ActionResult::done(true, Some(key))
+    }
+
     /// Troca o padrão do Windows no sentido.
     pub fn set_default_device(&self, id: &DeviceId, flow: Flow) -> Result<(), AudioError> {
         self.defaults.set_default(id, flow)?;
@@ -629,6 +697,21 @@ impl Engine {
 fn guard<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
     // Veneno do travamento: o estado continua válido o bastante para seguir.
     lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Chave de comparação do executável: o nome do arquivo, em minúsculas. Um caminho
+/// absoluto vira o nome do arquivo; um nome puro fica como está.
+fn exe_key(request: ExeRequest<'_>) -> String {
+    match request {
+        ExeRequest::Name(name) => name.to_lowercase(),
+        ExeRequest::Path(path) => exe_file_name(path).to_lowercase(),
+    }
+}
+
+/// Nome do arquivo de um caminho: o que vem depois do último `\` ou `/`.
+fn exe_file_name(path: &str) -> &str {
+    let cut = path.rfind(['\\', '/']).map(|at| at + 1).unwrap_or(0);
+    &path[cut..]
 }
 
 /// Limpa a rota de cada sessão do executável no sentido. Falha numa sessão (ex.: já
@@ -890,6 +973,8 @@ mod tests {
         fail_writes: AtomicBool,
         /// O endpoint sumiu: ler o mudo dele devolve `Gone` e escrever o mudo nele também falha.
         gone: AtomicBool,
+        /// Pids de sessão que já sumiram do Windows: escrever neles devolve `Gone`.
+        gone_sessions: Mutex<Vec<u32>>,
         /// Porta só de teste: avisa que a chamada chegou no backend e a segura parada até o
         /// teste liberar. Vazia (padrão) = a chamada passa direto.
         gate_chegou: Mutex<Option<mpsc::Sender<()>>>,
@@ -917,6 +1002,11 @@ mod tests {
 
         fn set_peak_of(&self, id: &str, p: f32) {
             self.peaks.lock().unwrap().insert(id.to_string(), p);
+        }
+
+        /// Marca uma sessão como encerrada: escrever o mudo nela devolve `Gone`.
+        fn gone_session(&self, pid: u32) {
+            self.gone_sessions.lock().unwrap().push(pid);
         }
 
         fn record(&self, call: CtlCall) -> Result<(), AudioError> {
@@ -992,7 +1082,11 @@ mod tests {
             self.record(CtlCall::SetSessionVolume(pid, flow, v))
         }
         fn set_session_muted(&self, pid: u32, flow: Flow, m: bool) -> Result<(), AudioError> {
-            self.record(CtlCall::SetSessionMuted(pid, flow, m))
+            self.record(CtlCall::SetSessionMuted(pid, flow, m))?;
+            if self.gone_sessions.lock().unwrap().contains(&pid) {
+                return Err(AudioError::Gone);
+            }
+            Ok(())
         }
     }
 
@@ -2597,5 +2691,188 @@ mod tests {
 
         assert_eq!(world.ctl.reads(), reads_before);
         assert_eq!(engine.state().devices[0].volume, 0.3);
+    }
+
+    // ---------- mudo de app (A8) ----------
+
+    #[test]
+    fn app_mute_affects_all_pids_of_the_exe_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_sessions(vec![
+            session(10, "discord.exe", Flow::Render, "fone"),
+            session(11, "Discord.EXE", Flow::Render, "fone"),
+            session(12, "spotify.exe", Flow::Render, "fone"),
+            // Captura do mesmo app: o microfone está fora de escopo.
+            session(13, "discord.exe", Flow::Capture, "mic"),
+        ]);
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(result.ok);
+        assert!(result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("discord.exe"));
+        // Só as sessões de saída do Discord: as outras duas nem são tocadas.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![
+                CtlCall::SetSessionMuted(10, Flow::Render, true),
+                CtlCall::SetSessionMuted(11, Flow::Render, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn app_mute_without_session_is_ok_and_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_sessions(vec![session(12, "spotify.exe", Flow::Render, "fone")]);
+        let before = world.notes();
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(result.ok);
+        assert!(!result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("discord.exe"));
+        assert!(world.ctl.calls().is_empty());
+        // Nada mudou: ninguém é avisado.
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn app_mute_rejects_unc_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_sessions(vec![session(10, "discord.exe", Flow::Render, "fone")]);
+        let before = world.notes();
+
+        let result = engine.act_app_mute("\\\\servidor\\share\\x.exe", true);
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::InvalidExe));
+        assert!(!result.changed);
+        assert_eq!(result.resolved, None);
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // Recusado antes de olhar o sistema: nada foi lido nem escrito.
+        assert!(world.ctl.calls().is_empty());
+        assert_eq!(world.source.session_reads(), 0);
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn app_mute_survives_one_gone_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_sessions(vec![
+            session(10, "discord.exe", Flow::Render, "fone"),
+            session(11, "discord.exe", Flow::Render, "fone"),
+        ]);
+        // A primeira sessão já sumiu do Windows.
+        world.ctl.gone_session(10);
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(result.ok);
+        assert!(result.changed);
+        // A sessão que sumiu não interrompe a outra.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![
+                CtlCall::SetSessionMuted(10, Flow::Render, true),
+                CtlCall::SetSessionMuted(11, Flow::Render, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn app_mute_fails_when_every_session_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_sessions(vec![session(10, "discord.exe", Flow::Render, "fone")]);
+        world.ctl.gone_session(10);
+        let before = world.notes();
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::DeviceGone));
+        assert!(!result.changed);
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn app_mute_reports_unchanged_when_already_muted() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let mut ja_mudo = session(10, "discord.exe", Flow::Render, "fone");
+        ja_mudo.muted = true;
+        world.source.set_sessions(vec![ja_mudo]);
+        let before = world.notes();
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(result.ok);
+        assert!(!result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("discord.exe"));
+        // Já estava no estado pedido: nenhuma escrita.
+        assert!(world.ctl.calls().is_empty());
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn app_mute_uses_fresh_sessions_not_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_sessions(vec![session(10, "discord.exe", Flow::Render, "fone")]);
+        engine.refresh();
+        // App aberto depois do refresh: a sessão nova não está no snapshot guardado.
+        world.source.set_sessions(vec![
+            session(10, "discord.exe", Flow::Render, "fone"),
+            session(20, "discord.exe", Flow::Render, "fone"),
+        ]);
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(result.ok);
+        assert!(result.changed);
+        // A sessão que acabou de aparecer também é mudada.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![
+                CtlCall::SetSessionMuted(10, Flow::Render, true),
+                CtlCall::SetSessionMuted(20, Flow::Render, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn app_mute_accepts_an_exe_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_sessions(vec![session(10, "discord.exe", Flow::Render, "fone")]);
+
+        let result = engine.act_app_mute("C:\\jogos\\discord.exe", true);
+
+        assert!(result.ok);
+        assert!(result.changed);
+        // A chave comparada é o nome do arquivo, não o caminho.
+        assert_eq!(result.resolved.as_deref(), Some("discord.exe"));
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetSessionMuted(10, Flow::Render, true)]
+        );
     }
 }
