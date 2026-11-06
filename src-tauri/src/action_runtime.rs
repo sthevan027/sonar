@@ -33,12 +33,31 @@ pub const ACTION_RESULT: &str = "action-result";
 /// nível seria um deadlock garantido.
 pub struct AppExecutor {
     engine: Arc<Engine>,
-    app: AppHandle,
+    /// Altera o painel. Na produção é a `shell` pelo `AppHandle`; no teste é uma função
+    /// — o `AppHandle` do Tauri não existe fora do app.
+    alternar_painel: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl AppExecutor {
     pub fn new(engine: Arc<Engine>, app: AppHandle) -> Self {
-        AppExecutor { engine, app }
+        let app = app.clone();
+        AppExecutor {
+            engine,
+            alternar_painel: Box::new(move || shell::toggle_from_shortcut(&app)),
+        }
+    }
+
+    /// O mesmo executor, com o painel sob controle do teste. O resto do caminho é idêntico
+    /// ao do atalho: é o que prova que atalho e IPC dão o mesmo resultado (SPEC §8).
+    #[cfg(test)]
+    pub fn com_painel(
+        engine: Arc<Engine>,
+        alternar_painel: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        AppExecutor {
+            engine,
+            alternar_painel: Box::new(alternar_painel),
+        }
     }
 }
 
@@ -47,7 +66,7 @@ impl ActionExecutor for AppExecutor {
         match action {
             // O painel não é do motor de áudio: quem o mexe é a `shell`.
             Action::TogglePanel => {
-                let mudou = shell::toggle_from_shortcut(&self.app);
+                let mudou = (self.alternar_painel)();
                 ActionResult::done(mudou, None)
             }
             outra => self.engine.execute(outra),
@@ -55,14 +74,37 @@ impl ActionExecutor for AppExecutor {
     }
 }
 
+/// O aviso vai para o painel quando a ação não deu certo?
+///
+/// Só quando `ok == false`: o painel reage ao que deu errado, não ao que deu certo. Um
+/// sucesso parcial (`ok == false`, `changed == true`) **também** avisa — o pedido foi
+/// cumprido só pela metade e o usuário precisa saber (Ruling 35/39).
+pub fn reporta_se_falhou(resultado: &ActionResult) -> bool {
+    !resultado.ok
+}
+
 /// Publica uma falha: no log e no evento `action-result`.
 ///
 /// O painel pode estar oculto — o evento fica esperando ele abrir. O log garante que a
 /// informação não se perca.
 pub fn publish_failure(app: &AppHandle, resultado: &ActionResult) {
+    publish_failure_to(
+        &|evento, resultado| {
+            let _ = app.emit(evento, resultado);
+        },
+        resultado,
+    );
+}
+
+/// O mesmo aviso, para um emissor qualquer.
+///
+/// O emissor vem por parâmetro para o aviso poder ser testado **sem o Tauri**: em
+/// produção é o `app.emit`, no teste é uma fila. O `let _ = app.emit(...)` engole o erro
+/// do emit — o que o painel recebe é o resultado, e é isso que o teste confere.
+pub fn publish_failure_to(emit: &dyn Fn(&str, &ActionResult), resultado: &ActionResult) {
     let frase = resultado.message.as_deref().unwrap_or("sem mensagem");
     eprintln!("sonar: a ação falhou: {frase}");
-    let _ = app.emit(ACTION_RESULT, resultado);
+    emit(ACTION_RESULT, resultado);
 }
 
 /// O aviso que vai para o painel quando uma ação não deu certo.
@@ -330,5 +372,66 @@ mod tests {
 
         assert!(!falha.ok);
         assert_eq!(falha.error_code, Some(ErrorCode::Internal));
+    }
+
+    // ---------- o filtro do Ruling 17 ----------
+
+    #[test]
+    fn o_sucesso_nao_vira_aviso() {
+        // O painel reage ao que deu errado, não ao que deu certo.
+        assert!(!reporta_se_falhou(&ActionResult::done(true, None)));
+        assert!(!reporta_se_falhou(&ActionResult::done(false, None)));
+    }
+
+    #[test]
+    fn a_falha_vira_aviso() {
+        assert!(reporta_se_falhou(&ActionResult::failed(
+            ErrorCode::QueueFull,
+            "A fila de ações está cheia."
+        )));
+    }
+
+    #[test]
+    fn o_sucesso_parcial_vira_aviso() {
+        // `ok == false` não implica `changed == false`: o sucesso parcial também é
+        // avisado (Ruling 35/39).
+        let parcial = ActionResult::partial(
+            ActionResult::done(true, Some("discord.exe".to_string())),
+            ErrorCode::Unsupported,
+            "O mudo foi aplicado em parte.",
+        );
+
+        assert!(reporta_se_falhou(&parcial));
+    }
+
+    // ---------- o evento da falha ----------
+
+    #[test]
+    fn o_evento_da_falha_tem_o_nome_esperado() {
+        // O nome é o que o TypeScript escuta: `action-result`.
+        assert_eq!(ACTION_RESULT, "action-result");
+    }
+
+    #[test]
+    fn a_falha_publicada_vai_no_evento_com_o_erro_dela() {
+        // O publicador é testado sem o Tauri: o emissor é uma fila.
+        let publicado: Arc<Mutex<Vec<(String, ActionResult)>>> = Arc::new(Mutex::new(Vec::new()));
+        let fila = publicado.clone();
+        let falha = queue_failure(SubmitError::Full);
+
+        publish_failure_to(
+            &|evento, resultado| fila.lock().unwrap().push((evento.to_string(), resultado.clone())),
+            &falha,
+        );
+
+        let avisos = publicado.lock().unwrap().clone();
+        assert_eq!(avisos.len(), 1, "a falha tem de gerar um aviso");
+        assert_eq!(avisos[0].0, "action-result", "o evento é o `action-result`");
+        assert!(!avisos[0].1.ok, "o aviso de fila cheia não é sucesso");
+        assert_eq!(
+            avisos[0].1.error_code,
+            Some(ErrorCode::QueueFull),
+            "a fila cheia tem código próprio"
+        );
     }
 }

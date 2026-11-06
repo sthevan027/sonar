@@ -1,11 +1,10 @@
 mod shell;
 mod shell_geometry;
-#[allow(dead_code)] // `spawn` (janela manual) só é usada nos testes; o resto é consumido pelo app.
 mod dispatcher;
-#[allow(dead_code)] // As variantes de `ErrorCode` que ainda não têm ação ficam sem construção; o allow cobre o módulo.
 mod actions;
 mod action_runtime;
 mod bindings;
+mod hotkeys;
 #[allow(dead_code)] // Tasks seguintes consomem o roteador; até lá só os testes o usam.
 mod audio;
 #[allow(dead_code)] // Task 9 consome as regras; até lá só os testes o usam.
@@ -65,9 +64,14 @@ pub fn run() {
                         let Some(dispatcher) = app.try_state::<Dispatcher>() else {
                             return;
                         };
-                        let bindings = tabela_de_atalhos(app);
+                        let bindings = hotkeys::registrados();
                         let avisar = action_runtime::notificador(app);
-                        action_runtime::enfileirar_atalho(&dispatcher, &bindings, shortcut, &avisar);
+                        action_runtime::enfileirar_atalho(
+                            &dispatcher,
+                            &bindings,
+                            shortcut,
+                            &avisar,
+                        );
                     }
                 })
                 .build(),
@@ -93,6 +97,9 @@ pub fn run() {
             commands::activate_profile,
             commands::get_settings,
             commands::save_settings,
+            commands::save_bindings,
+            commands::get_binding_status,
+            commands::get_default_bindings,
             commands::list_running_apps,
             commands::app_icon,
             commands::set_blur_hide_suspended,
@@ -143,7 +150,7 @@ fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
             // O evento sai só quando a ação não deu certo (Ruling 17). Um sucesso parcial
             // (`ok == false`, `changed == true`) também sai: o usuário precisa saber que
             // o pedido foi cumprido só pela metade.
-            if !resultado.ok {
+            if action_runtime::reporta_se_falhou(resultado) {
                 avisar(acao, resultado);
             }
         });
@@ -250,30 +257,6 @@ fn panel_visible(app: &AppHandle) -> bool {
     app.get_webview_window(PANEL)
         .and_then(|window| window.is_visible().ok())
         .unwrap_or(false)
-}
-
-/// A tabela de atalhos valendo agora: os padrão do app mais o atalho legado das
-/// configurações (que ainda alterna o painel).
-///
-/// O atalho legado entra na tabela enquanto a Task 14 não unificar as duas coisas: sem
-/// ele, o atalho que o usuário salvou deixaria de funcionar.
-fn tabela_de_atalhos(app: &AppHandle) -> Vec<bindings::Binding> {
-    let mut tabela = bindings::default_bindings();
-    let legado = app
-        .try_state::<Arc<Engine>>()
-        .map(|engine| engine.settings().shortcut);
-    if let Some(legado) = legado {
-        let ja_existe = tabela
-            .iter()
-            .any(|binding| binding.accelerator.eq_ignore_ascii_case(&legado));
-        if !ja_existe {
-            tabela.push(bindings::Binding {
-                accelerator: legado,
-                action: actions::Action::TogglePanel,
-            });
-        }
-    }
-    tabela
 }
 
 /// Ferramenta de desenvolvimento: com `SONAR_DEBUG_STATE` definida, imprime o primeiro

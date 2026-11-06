@@ -11,8 +11,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::actions::Action;
 use crate::action_runtime;
-use crate::bindings;
 use crate::dispatcher::Dispatcher;
+use crate::hotkeys;
 use crate::shell_geometry::{corner_fallback, place_near_tray, Rect, Size};
 use crate::state::Settings;
 
@@ -38,9 +38,6 @@ type HiddenAt = Arc<Mutex<Option<Instant>>>;
 /// Último retângulo conhecido do ícone da bandeja, em pixels físicos. `None` antes do primeiro
 /// evento com posição válida: o painel então abre no canto da área de trabalho.
 static LAST_TRAY: Mutex<Option<Rect>> = Mutex::new(None);
-
-/// Atalho que está registrado agora (`None` antes do primeiro registro).
-static REGISTERED_SHORTCUT: Mutex<Option<String>> = Mutex::new(None);
 
 /// Enquanto o diálogo "Procurar .exe" está aberto, o painel perde o foco para ele e não deve
 /// se esconder. A interface liga e desliga pelo comando `set_blur_hide_suspended`. O prazo é
@@ -312,7 +309,10 @@ impl ShortcutRegistrar for PluginShortcuts<'_> {
             .parse()
             .map_err(|_| format!("Atalho inválido: {accelerator}."))?;
         self.app.global_shortcut().register(shortcut).map_err(|_| {
-            format!("Não foi possível registrar o atalho {accelerator}. Outro programa pode estar usando essa combinação.")
+            format!(
+                "Não foi possível registrar o atalho {accelerator}. \
+                 Outro programa pode estar usando essa combinação."
+            )
         })
     }
 
@@ -321,6 +321,14 @@ impl ShortcutRegistrar for PluginShortcuts<'_> {
             let _ = self.app.global_shortcut().unregister(shortcut);
         }
     }
+}
+
+/// O registrador real: o plugin de atalho global do Windows.
+///
+/// É a ponte entre a lógica de binding (`hotkeys`) e o plugin: os testes usam um
+/// registrador falso, a produção usa este.
+pub fn registrador(app: &AppHandle) -> impl ShortcutRegistrar + '_ {
+    PluginShortcuts { app }
 }
 
 /// Sonda de conflito de atalho (spike S4): registra cada acelerador por um instante e solta,
@@ -369,14 +377,6 @@ fn probe_shortcuts_from_env(app: &AppHandle) {
     }
 }
 
-/// Registra o atalho guardado agora. Em falha o atalho anterior segue e a frase vai de volta.
-pub fn apply_shortcut(app: &AppHandle, accelerator: &str) -> Result<(), String> {
-    let mut current = locked(&REGISTERED_SHORTCUT);
-    switch_shortcut(&PluginShortcuts { app }, current.as_deref(), accelerator)?;
-    *current = Some(accelerator.to_string());
-    Ok(())
-}
-
 /// Liga ou desliga "Iniciar com o Windows": valor `Sonar` em `HKCU\...\Run` com o caminho do
 /// executável entre aspas. Desligar remove o valor (sem erro se ele não existir).
 #[cfg(windows)]
@@ -410,50 +410,16 @@ pub fn set_autostart(_enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Registra um atalho global que ainda não está registrado.
+/// Aplica o que foi salvo ao abrir o app: os atalhos da lista de bindings e "Iniciar com
+/// o Windows" (que re-grava o caminho do executável, caso ele tenha mudado).
 ///
-/// Já registrado (o atalho legado das configurações ocupa a mesma combinação): nada a
-/// fazer — registrar de novo seria recusado pelo plugin.
-fn register_binding(app: &AppHandle, accelerator: &str) -> Result<(), String> {
-    let shortcut: Shortcut = accelerator
-        .parse()
-        .map_err(|_| format!("Atalho inválido: {accelerator}."))?;
-    if app.global_shortcut().is_registered(shortcut) {
-        return Ok(());
-    }
-    app.global_shortcut().register(shortcut).map_err(|_| {
-        format!("Não foi possível registrar o atalho {accelerator}. Outro programa pode estar usando essa combinação.")
-    })
-}
-
-/// Aplica o que foi salvo ao abrir o app: atalho e "Iniciar com o Windows" (que re-grava o
-/// caminho do executável, caso ele tenha mudado). Falha vira aviso no log: o app segue.
+/// O atalho legado não é registrado por aqui: ele virou o binding `toggle_panel` e quem
+/// registra os atalhos é o `hotkeys`. Falha vira aviso no log: o app segue.
 pub fn apply_at_startup(app: &AppHandle, settings: &Settings) {
-    if let Err(err) = apply_shortcut(app, &settings.shortcut) {
-        eprintln!("sonar: {err}");
-    }
     if let Err(err) = set_autostart(settings.autostart) {
         eprintln!("sonar: {err}");
     }
-    // Os atalhos padrão entram um a um: um que falhe (combinação ocupada por outro
-    // programa) não impede os demais de ficarem registrados.
-    for binding in bindings::default_bindings() {
-        if let Err(err) = register_binding(app, &binding.accelerator) {
-            eprintln!("sonar: {err}");
-        }
-    }
-}
-
-/// Aplica atalho e "Iniciar com o Windows" de uma gravação de configurações. Falha devolve a
-/// frase para a tela e a gravação não acontece: se o "Iniciar com o Windows" falhar, o atalho
-/// volta ao anterior.
-pub fn apply_settings(app: &AppHandle, previous: &Settings, next: &Settings) -> Result<(), String> {
-    apply_shortcut(app, &next.shortcut)?;
-    if let Err(err) = set_autostart(next.autostart) {
-        let _ = apply_shortcut(app, &previous.shortcut);
-        return Err(err);
-    }
-    Ok(())
+    hotkeys::apply_at_startup(app, settings);
 }
 
 #[cfg(test)]

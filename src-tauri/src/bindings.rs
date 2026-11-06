@@ -8,6 +8,7 @@ use tauri_plugin_global_shortcut::Shortcut;
 
 use crate::actions::Action;
 use crate::state::Settings;
+use crate::store::CURRENT_VERSION;
 
 /// Um atalho global e a ação que ele dispara.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,16 +60,9 @@ pub fn action_for(bindings: &[Binding], pressed: &Shortcut) -> Option<Action> {
 }
 
 /// Tamanho máximo do texto do acelerador.
-#[allow(dead_code)] // A Task 13/14 usa o limite ao validar o que chega pelo IPC.
 pub const MAX_ACCELERATOR_CHARS: usize = 64;
 
-/// Versão do formato das configurações que esta build entende.
-///
-/// A v1 tinha só o atalho legado; a v2 tem a tabela de bindings.
-pub const SETTINGS_VERSION: u32 = 2;
-
 /// O motivo pelo qual uma lista de atalhos foi recusada.
-#[allow(dead_code)] // A Task 13/14 transforma o motivo na resposta do IPC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BindingError {
     /// O acelerador está vazio.
@@ -83,7 +77,6 @@ pub enum BindingError {
 
 impl BindingError {
     /// A frase para o usuário, em português.
-    #[allow(dead_code)] // A Task 13/14 mostra a frase quando o IPC recusa a lista.
     pub fn message(&self) -> &'static str {
         match self {
             BindingError::Empty => "O atalho está vazio.",
@@ -99,7 +92,6 @@ impl BindingError {
 ///
 /// A comparação de duplicatas é pela combinação **parseada**: `ctrl+alt+m` e
 /// `Ctrl+Alt+M` são a mesma tecla, e `Ctrl+Alt+M` e `Alt+Ctrl+M` também.
-#[allow(dead_code)] // A Task 13/14 valida a lista que chega pelo IPC.
 pub fn validate_bindings(list: &[Binding]) -> Result<(), (usize, BindingError)> {
     let mut vistas: Vec<Shortcut> = Vec::new();
     for (indice, binding) in list.iter().enumerate() {
@@ -134,8 +126,11 @@ pub fn validate_bindings(list: &[Binding]) -> Result<(), (usize, BindingError)> 
 /// Duas garantias: uma lista de bindings já existente e não vazia **nunca** é
 /// sobrescrita (Ruling 14), e um atalho legado vazio ou inválido não gera binding
 /// nenhum — a migração nunca inventa um atalho que o Windows não entende.
+///
+/// A versão do formato é a do `Store` (`store::CURRENT_VERSION`): uma fonte só — um
+/// número de versão em dois arquivos diverge em silêncio.
 pub fn migrate_settings(version: u32, mut settings: Settings) -> (Settings, bool) {
-    if version >= SETTINGS_VERSION {
+    if version >= CURRENT_VERSION {
         return (settings, false);
     }
     // Ruling 14: lista já existente e não vazia fica como está.
@@ -311,18 +306,20 @@ mod tests {
 
     #[test]
     fn every_binding_error_has_a_message_in_portuguese() {
-        for erro in [
-            BindingError::Empty,
-            BindingError::TooLong,
-            BindingError::Syntax,
-            BindingError::Duplicate,
-        ] {
-            let mensagem = erro.message();
-            assert!(!mensagem.is_empty());
-            assert!(
-                mensagem.chars().any(|c| c.is_ascii_alphabetic()),
-                "mensagem sem texto: {mensagem}"
-            );
+        // A frase exata de cada variante: o teste confere o que o nome promete (a frase
+        // que o usuário lê), e não só que existe texto.
+        let esperado = [
+            (BindingError::Empty, "O atalho está vazio."),
+            (
+                BindingError::TooLong,
+                "O atalho é longo demais (máximo de 64 caracteres).",
+            ),
+            (BindingError::Syntax, "O atalho não é uma combinação válida."),
+            (BindingError::Duplicate, "Esse atalho já está em uso."),
+        ];
+
+        for (erro, frase) in esperado {
+            assert_eq!(erro.message(), frase, "frase errada para {erro:?}");
         }
     }
 
