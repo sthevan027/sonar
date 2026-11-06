@@ -11,7 +11,7 @@
 
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::actions::{Action, ActionExecutor, ActionResult, ErrorCode};
 
@@ -27,6 +27,13 @@ pub enum SubmitError {
     /// A fila está cheia: a ação não entrou e nada mudou.
     Full,
     /// O worker encerrou: ninguém mais vai consumir a fila.
+    ///
+    /// Na prática só acontece se o `Receiver` cair — e ele cai junto com o worker.
+    /// Como o pânico do executor é contido (`catch_unwind` em `run`), o worker
+    /// não morre por pânico: hoje esse caminho é praticamente inalcançável. Ele
+    /// fica no enum porque é o contrato honesto de um `try_send` sobre um canal
+    /// desconectado, e porque nada impede o worker de encerrar no futuro
+    /// (quando ele ganhar um caminho de saída próprio).
     Closed,
 }
 
@@ -67,6 +74,17 @@ impl Dispatcher {
         Dispatcher { tx }
     }
 
+    /// Sobe o worker com a janela de coalescência do plano (`COALESCE_WINDOW`).
+    ///
+    /// É o construtor que o app deve usar: a janela é um parâmetro só para os
+    /// testes, que precisam de janelas pequenas para não demorarem.
+    pub fn spawn_default(
+        exec: Arc<dyn ActionExecutor>,
+        report: Arc<dyn Fn(&Action, &ActionResult) + Send + Sync>,
+    ) -> Dispatcher {
+        Dispatcher::spawn(exec, report, COALESCE_WINDOW)
+    }
+
     /// Enfileira uma ação. Nunca bloqueia: fila cheia vira `SubmitError::Full`.
     pub fn submit(&self, action: Action) -> Result<(), SubmitError> {
         match self.tx.try_send(action) {
@@ -90,8 +108,10 @@ fn run(
         exec.execute(action.clone())
     })) {
         Ok(resultado) => resultado,
+        // O pânico é um bug do executor, não uma recusa do Windows: `OsError`
+        // diria que foi o sistema a recusar a operação, e não foi.
         Err(_) => ActionResult::failed(
-            ErrorCode::OsError,
+            ErrorCode::Internal,
             "A ação falhou de forma inesperada.",
         ),
     };
@@ -131,8 +151,19 @@ fn worker(
                 // absoluto e `ToggleOutputMute` é efeito de borda, não accumulate.
                 let mut total = delta;
                 let mut quebrou: Option<Action> = None;
+                // O prazo do lote é FIXO: nasce com a primeira ação e não se renova
+                // a cada ação que chega. Se renovasse, uma rajada com intervalo
+                // menor que a janela (o auto-repeat do Windows, a 30–60 ms) nunca
+                // fecharia o lote: `run()` não seria chamado, o volume não seria
+                // aplicado durante a rajada e a fila encheria de volumes pendentes
+                // (o atalho passaria a receber `SubmitError::Full`).
+                let prazo = Instant::now() + window;
                 loop {
-                    match rx.recv_timeout(window) {
+                    // `saturating_duration_since` devolve `Duration::ZERO` quando o
+                    // prazo já passou: `recv_timeout(Duration::ZERO)` é um try
+                    // receive, que não bloqueia — o lote fecha na hora.
+                    let restante = prazo.saturating_duration_since(Instant::now());
+                    match rx.recv_timeout(restante) {
                         Ok(Action::StepOutputVolume { delta }) => total += delta,
                         // Ação de outro tipo: encerra o lote e roda depois dele,
                         // na ordem de chegada.
@@ -214,7 +245,12 @@ mod tests {
 
             let deve_panicar = *self.panicar_em.lock().unwrap() == Some(indice);
             if deve_panicar {
-                panic!("pânico de propósito no executor");
+                // `resume_unwind` em vez de `panic!`: o hook de pânico não é
+                // chamado, então o `cargo test` não imprime a mensagem do pânico
+                // fora da captura do harness. (Um `panic::set_hook` global resolveria
+                // o ruído, mas silenciaria o pânico dos outros testes, que rodam em
+                // paralelo.)
+                std::panic::resume_unwind(Box::new("pânico de propósito no executor"));
             }
             let deve_falhar = *self.falhar_em.lock().unwrap() == Some(indice);
             if deve_falhar {
@@ -265,6 +301,22 @@ mod tests {
                     "faltou execução: esperava {quantidade}, recebi {} ({err})",
                     vistas.len()
                 ),
+            }
+        }
+        vistas
+    }
+
+    /// Espera até `quantidade` execuções e devolve o que chegou.
+    ///
+    /// Diferente de [`espera`], não falha: devolve o que chegou até o prazo, e quem
+    /// chama decide como assertir. Serve para os testes que precisam dizer "vieram
+    /// menos do que eu esperava" com uma mensagem própria.
+    fn espera_ate(rx: &Receiver<Action>, quantidade: usize, prazo: Duration) -> Vec<Action> {
+        let mut vistas: Vec<Action> = Vec::new();
+        while vistas.len() < quantidade {
+            match rx.recv_timeout(prazo) {
+                Ok(acao) => vistas.push(acao),
+                Err(_) => break,
             }
         }
         vistas
@@ -378,6 +430,126 @@ mod tests {
     }
 
     #[test]
+    fn o_prazo_do_lote_conta_a_partir_da_primeira_acao() {
+        // Janela de 300 ms. A primeira ação abre o lote; a segunda chega 200 ms
+        // depois (ainda dentro da janela) e a terceira 380 ms depois da primeira —
+        // ou seja, depois do prazo fixo do lote, mas antes do prazo que uma janela
+        // renovadora daria (a segunda ação empurraria o fim do lote para 500 ms).
+        //
+        // Com a janela renovadora de hoje, as três viram UM lote só (uma chamada).
+        // Com o prazo fixo, são dois lotes: o primeiro com os dois primeiros passos
+        // e o segundo com o terceiro.
+        let window = Duration::from_millis(300);
+        let (tx_eventos, rx_eventos) = mpsc::channel();
+        let exec = FakeExecutor::new(tx_eventos);
+        let (report, _avisos, _registros) = registrador();
+        let dispatcher = Dispatcher::spawn(exec.clone(), report, window);
+
+        // Aquecer o worker: ele precisa estar no `recv()` antes do primeiro passo.
+        // Se o worker só acordasse depois, o prazo do lote nasceria atrasado e o
+        // teste mediria outra coisa.
+        dispatcher
+            .submit(Action::TogglePanel)
+            .expect("fila com espaço");
+        espera(&rx_eventos, 1);
+
+        dispatcher
+            .submit(Action::StepOutputVolume { delta: 0.01 })
+            .expect("fila com espaço");
+        std::thread::sleep(Duration::from_millis(200));
+        dispatcher
+            .submit(Action::StepOutputVolume { delta: 0.02 })
+            .expect("fila com espaço");
+        std::thread::sleep(Duration::from_millis(180));
+        dispatcher
+            .submit(Action::StepOutputVolume { delta: 0.04 })
+            .expect("fila com espaço");
+
+        let vistas = espera_ate(&rx_eventos, 2, Duration::from_secs(3));
+        assert_eq!(
+            vistas.len(),
+            2,
+            "esperava 2 lotes (2 chamadas ao executor), veio {}: {:?}",
+            vistas.len(),
+            exec.chamadas()
+        );
+        // O primeiro lote leva o primeiro e o segundo passo (ambos dentro da janela).
+        match vistas[0] {
+            Action::StepOutputVolume { delta } => assert!(
+                (delta - 0.03).abs() < 1e-4,
+                "o primeiro lote somou errado: {delta} (esperava ~0.03)"
+            ),
+            ref outra => panic!("chamada inesperada: {outra:?}"),
+        }
+        // O terceiro passo chegou depois do prazo fixo: ele abre um lote novo.
+        match vistas[1] {
+            Action::StepOutputVolume { delta } => assert!(
+                (delta - 0.04).abs() < 1e-4,
+                "o segundo lote somou errado: {delta} (esperava ~0.04)"
+            ),
+            ref outra => panic!("chamada inesperada: {outra:?}"),
+        }
+    }
+
+    #[test]
+    fn rajada_continua_drena_em_varios_lotes() {
+        // A rajada real: segurar a tecla de volume. O auto-repeat do Windows chega
+        // a cada 30–60 ms — sempre dentro da janela de 75 ms. Com a janela
+        // renovadora, o lote nunca fechava: o volume não era aplicado durante a
+        // rajada inteira e a fila enchia de volumes pendentes.
+        const INTERVALO: Duration = Duration::from_millis(20);
+        const PASSOS: usize = 15;
+        const DELTA: f32 = 0.05;
+        let (tx_eventos, rx_eventos) = mpsc::channel();
+        let exec = FakeExecutor::new(tx_eventos);
+        let (report, _avisos, _registros) = registrador();
+        let dispatcher = Dispatcher::spawn_default(exec.clone(), report);
+
+        // Aquecer o worker: com a rajada já enfileirada antes de o worker acordar,
+        // tudo cairia num lote só e o teste não diria nada sobre a rajada.
+        dispatcher
+            .submit(Action::TogglePanel)
+            .expect("fila com espaço");
+        espera(&rx_eventos, 1);
+
+        let produtor = dispatcher.clone();
+        std::thread::spawn(move || {
+            for _ in 0..PASSOS {
+                produtor
+                    .submit(Action::StepOutputVolume { delta: DELTA })
+                    .expect("fila com espaço");
+                std::thread::sleep(INTERVALO);
+            }
+        });
+
+        // O que se fixa não é o número exato de lotes (ele depende do alinhamento
+        // do tempo), e sim: a rajada drena em MAIS DE UM lote e a soma dos lotes
+        // bate com a soma de tudo que foi enviado.
+        let total = PASSOS as f32 * DELTA;
+        let mut lotes = 0usize;
+        let mut soma = 0.0f32;
+        let limite = Instant::now() + Duration::from_secs(10);
+        while (soma - total).abs() > 1e-4 && Instant::now() < limite {
+            match rx_eventos.recv_timeout(Duration::from_millis(500)) {
+                Ok(Action::StepOutputVolume { delta }) => {
+                    lotes += 1;
+                    soma += delta;
+                }
+                Ok(outra) => panic!("chamada inesperada: {outra:?}"),
+                Err(_) => {}
+            }
+        }
+        assert!(
+            (soma - total).abs() < 1e-4,
+            "a soma dos lotes deu {soma}, esperava {total}"
+        );
+        assert!(
+            lotes > 1,
+            "a rajada virou {lotes} lote(s) só: o lote não fecha durante a rajada"
+        );
+    }
+
+    #[test]
     fn fila_cheia_nao_bloqueia_o_produtor() {
         let (tx_eventos, _rx_eventos) = mpsc::channel();
         let exec = FakeExecutor::new(tx_eventos);
@@ -398,20 +570,43 @@ mod tests {
 
         // Agora a fila está vazia e o worker está ocupado: quem enfileira tem de
         // receber o erro de volta, não ficar esperando.
-        let inicio = Instant::now();
-        let mut aceitas = 0usize;
-        let mut recusadas = 0usize;
-        for _ in 0..80 {
-            match dispatcher.submit(Action::ToggleOutputMute) {
-                Ok(()) => aceitas += 1,
-                Err(SubmitError::Full) => recusadas += 1,
-                Err(outro) => panic!("erro inesperado ao enfileirar: {outro}"),
+        //
+        // O produtor roda numa thread-fantasma: se `submit` bloqueasse (se usasse
+        // `send` em vez de `try_send`), a 65ª chamada ficaria esperando para
+        // sempre e o teste TRAVARIA a suíte inteira. Com a thread-fantasma, o
+        // bloqueio vira uma falha legível.
+        let fantasma = dispatcher.clone();
+        let (tx_resultado, rx_resultado) =
+            mpsc::channel::<Result<(usize, usize, Duration), String>>();
+        std::thread::spawn(move || {
+            let inicio = Instant::now();
+            let mut aceitas = 0usize;
+            let mut recusadas = 0usize;
+            for _ in 0..80 {
+                match fantasma.submit(Action::ToggleOutputMute) {
+                    Ok(()) => aceitas += 1,
+                    Err(SubmitError::Full) => recusadas += 1,
+                    Err(outro) => {
+                        let _ = tx_resultado
+                            .send(Err(format!("erro inesperado ao enfileirar: {outro}")));
+                        return;
+                    }
+                }
             }
-        }
-        let decorrido = inicio.elapsed();
+            let _ = tx_resultado.send(Ok((aceitas, recusadas, inicio.elapsed())));
+        });
+
+        let (aceitas, recusadas, decorrido) =
+            match rx_resultado.recv_timeout(Duration::from_secs(5)) {
+                Ok(Ok(v)) => v,
+                Ok(Err(mensagem)) => panic!("{mensagem}"),
+                Err(err) => panic!(
+                    "o produtor não voltou em 5 s ({err}): `submit` está bloqueando o produtor"
+                ),
+            };
 
         assert!(
-            decorrido < Duration::from_millis(200),
+            decorrido < Duration::from_secs(1),
             "submit levou {decorrido:?}: bloqueou o produtor"
         );
         assert_eq!(
@@ -460,7 +655,7 @@ mod tests {
         let (tx_eventos, rx_eventos) = mpsc::channel();
         let exec = FakeExecutor::new(tx_eventos);
         exec.panicar_na(0);
-        let (report, _avisos, _registros) = registrador();
+        let (report, avisos, registros) = registrador();
         let dispatcher = Dispatcher::spawn(exec.clone(), report, COALESCE_WINDOW);
 
         dispatcher
@@ -474,6 +669,29 @@ mod tests {
         assert_eq!(
             vistas,
             vec![Action::ToggleOutputMute, Action::TogglePanel]
+        );
+
+        // O pânico tem de virar uma falha publicada: o `report` não pode engolir o
+        // resultado, senão quem chamou fica sem resposta.
+        espera_avisos(&avisos, 2);
+        let publicados = registros.lock().unwrap().clone();
+        assert_eq!(publicados.len(), 2, "o report roda uma vez por execução");
+        assert!(
+            !publicados[0].1.ok,
+            "o pânico do executor tem de virar falha, não sucesso"
+        );
+        assert_eq!(
+            publicados[0].1.error_code,
+            Some(ErrorCode::Internal),
+            "o pânico é bug do executor, não recusa do Windows"
+        );
+        assert_eq!(
+            publicados[0].1.message.as_deref(),
+            Some("A ação falhou de forma inesperada.")
+        );
+        assert!(
+            publicados[1].1.ok,
+            "a segunda ação tem de rodar normalmente"
         );
     }
 

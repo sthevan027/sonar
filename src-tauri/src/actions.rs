@@ -55,6 +55,10 @@ pub enum ErrorCode {
     InvalidExe,
     InvalidValue,
     QueueFull,
+    /// Falha interna do app: um bug no executor, não uma recusa do Windows.
+    ///
+    /// Serializa em `internal` — o espelho TypeScript precisa conhecer esse código.
+    Internal,
 }
 
 /// Resultado de uma ação. Sempre serializa com as cinco chaves, mesmo quando vazias.
@@ -291,6 +295,22 @@ mod tests {
         // `resolved` preservado: o que a ação resolveu continua valendo.
         assert_eq!(partial.resolved.as_deref(), Some("discord.exe"));
         assert_eq!(partial.error_code, Some(ErrorCode::DeviceGone));
+    }
+
+    #[test]
+    fn internal_failure_serializes_as_internal() {
+        // `internal` é o código novo: o espelho TypeScript da Task 16 tem de lê-lo
+        // como uma falha interna do app — e não como `os_error`, que diria que foi
+        // o Windows a recusar a operação.
+        let json = serde_json::to_string(&ActionResult::failed(
+            ErrorCode::Internal,
+            "A ação falhou de forma inesperada.",
+        ))
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"ok":false,"changed":false,"resolved":null,"error_code":"internal","message":"A ação falhou de forma inesperada."}"#
+        );
     }
 
     #[test]
