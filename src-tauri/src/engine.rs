@@ -105,6 +105,14 @@ struct ProfileActivation {
     routing_unsupported: bool,
 }
 
+/// O que `route_locked` relata.
+struct RouteReport {
+    /// O conjunto de regras mudou de fato (comparação antes/depois).
+    changed: bool,
+    /// O roteamento (gravar ou limpar a rota) esbarrou em `Unsupported` **nesta** rodada.
+    unsupported: bool,
+}
+
 impl ProfileActivation {
     /// Perfil inexistente: nada muda e nada é avisado.
     fn not_found() -> ProfileActivation {
@@ -203,7 +211,7 @@ impl Engine {
     pub fn set_app_route(&self, exe: &str, flow: Flow, device: Option<DeviceId>) {
         {
             let _apply = guard(&self.apply);
-            self.route_locked(exe, flow, device);
+            let _ = self.route_locked(exe, flow, device);
         }
         self.persist("rules", |inner| inner.rules.clone());
         self.emit();
@@ -211,10 +219,13 @@ impl Engine {
 
     /// Corpo de `set_app_route`: **quem chama já segura `apply`** (o `Mutex` não é
     /// reentrante). Não grava em disco nem avisa a interface. Devolve se o conjunto de
-    /// regras mudou de fato (comparação antes/depois).
-    fn route_locked(&self, exe: &str, flow: Flow, device: Option<DeviceId>) -> bool {
+    /// regras mudou de fato (comparação antes/depois) e se **esta** rodada esbarrou em
+    /// `Unsupported` (gravar ou limpar a rota) — o veredito da ação, que não é o latch
+    /// global `routing_available`.
+    fn route_locked(&self, exe: &str, flow: Flow, device: Option<DeviceId>) -> RouteReport {
         let exe = exe.to_lowercase();
         let rules_changed;
+        let unsupported;
         {
             let (devices, sessions) = {
                 let mut inner = self.lock();
@@ -248,6 +259,15 @@ impl Engine {
                         })
                         .collect();
                     self.patch_sessions(&routed, flow, &device);
+                    unsupported = outcomes.iter().any(|o| {
+                        matches!(
+                            o,
+                            Outcome::Skipped {
+                                reason: AudioError::Unsupported(_),
+                                ..
+                            }
+                        )
+                    });
                     self.latch_routing(&outcomes);
                 }
                 None => {
@@ -256,7 +276,7 @@ impl Engine {
                         .filter(|s| s.flow == flow && s.exe.eq_ignore_ascii_case(&exe))
                         .map(|s| s.pid)
                         .collect();
-                    clear_sessions(self.backend.as_ref(), &sessions, &exe, flow);
+                    unsupported = clear_sessions(self.backend.as_ref(), &sessions, &exe, flow);
                     // Sem rota, a sessão segue o padrão do Windows para o sentido.
                     if let Some(default) = devices
                         .iter()
@@ -267,7 +287,10 @@ impl Engine {
                 }
             }
         }
-        rules_changed
+        RouteReport {
+            changed: rules_changed,
+            unsupported,
+        }
     }
 
     /// Ativa um perfil. `false` quando o id não existe (nada muda e nada é avisado).
@@ -314,7 +337,7 @@ impl Engine {
             self.store_system(generation, read);
             // O veredito do roteamento é o **desta** rodada, não o latch global: uma
             // falha antiga não pode fazer esta ativação parecer um `Unsupported`.
-            let routing_unsupported = self.reconcile_cached();
+            let mut routing_unsupported = self.reconcile_cached();
             let cleared: Vec<(String, Flow)> = changes
                 .into_iter()
                 .filter_map(|change| match change {
@@ -325,7 +348,8 @@ impl Engine {
             if !cleared.is_empty() {
                 let sessions = self.lock().sessions.clone();
                 for (exe, flow) in &cleared {
-                    clear_sessions(self.backend.as_ref(), &sessions, exe, *flow);
+                    routing_unsupported |=
+                        clear_sessions(self.backend.as_ref(), &sessions, exe, *flow);
                 }
                 // Sem a leitura, a sessão limpa mostraria o dispositivo antigo.
                 if let Ok(fresh) = self.source.sessions() {
@@ -645,16 +669,17 @@ impl Engine {
         let key = exe_key(request);
         // A normalização vem antes de resolver o id: só o rótulo vira `None`.
         let device = device.filter(|d| !is_default_label(d)).map(DeviceId);
-        let (changed, routing_available) = {
+        // O veredito é o desta rodada, não o latch global `routing_available` (Ruling 37,
+        // SPEC §3): uma falha antiga não pode reprovar uma ação que nem tentou rotear.
+        let RouteReport { changed, unsupported } = {
             let _apply = guard(&self.apply);
-            let changed = self.route_locked(&key, Flow::Render, device);
-            (changed, self.lock().routing_available)
+            self.route_locked(&key, Flow::Render, device)
         };
         if changed {
             self.persist("rules", |inner| inner.rules.clone());
         }
         self.emit();
-        if !routing_available {
+        if unsupported {
             let message = "Este Windows não permite essa operação.";
             // A regra pode ter sido gravada mesmo sem o roteamento: sucesso parcial.
             return if changed {
@@ -969,19 +994,24 @@ fn lowercase_first(text: &str) -> String {
 }
 
 /// Limpa a rota de cada sessão do executável no sentido. Falha numa sessão (ex.: já
-/// encerrada) não impede as outras.
+/// encerrada) não impede as outras. Devolve `true` se alguma esbarrou em `Unsupported`;
+/// as demais falhas seguem ignoradas (a sessão pode ter acabado de fechar).
 fn clear_sessions(
     backend: &dyn RouteBackend,
     sessions: &[AudioSession],
     exe: &str,
     flow: Flow,
-) {
+) -> bool {
+    let mut unsupported = false;
     for session in sessions
         .iter()
         .filter(|s| s.flow == flow && s.exe.eq_ignore_ascii_case(exe))
     {
-        let _ = backend.clear_route(session.pid, flow);
+        if let Err(AudioError::Unsupported(_)) = backend.clear_route(session.pid, flow) {
+            unsupported = true;
+        }
     }
+    unsupported
 }
 
 /// Grava um documento. Devolve a mensagem quando a gravação falha (vai para o stderr também);
@@ -1238,6 +1268,9 @@ mod tests {
 
         fn clear_route(&self, pid: u32, flow: Flow) -> Result<(), AudioError> {
             self.clear_calls.lock().unwrap().push((pid, flow));
+            if self.unsupported.load(Ordering::SeqCst) {
+                return Err(AudioError::Unsupported("teste".into()));
+            }
             self.routes.lock().unwrap().remove(&pid);
             self.mirror_to(pid, flow, &dev_id("padrao"));
             Ok(())
@@ -3464,6 +3497,47 @@ mod tests {
             engine.state().rules,
             vec![rule("chrome.exe", Flow::Render, "fone")]
         );
+    }
+
+    #[test]
+    fn move_app_ignores_a_stale_unsupported_latch_when_no_route_was_tried() {
+        // I4: uma releitura antiga derrubou o latch; agora o app de destino está fechado
+        // (nenhuma rota tentada). O veredito da ação é desta rodada, não do latch.
+        let dir = tempfile::tempdir().unwrap();
+        let (world, engine) = move_app_setup(dir.path());
+        world.backend.unsupported.store(true, Ordering::SeqCst);
+        engine.act_move_app("chrome.exe", Some("fone".to_string()));
+        assert!(!engine.state().routing_available, "o latch caiu");
+        world.backend.unsupported.store(false, Ordering::SeqCst);
+
+        // Spotify fechado: sem sessão, nada é roteado.
+        let com_destino = engine.act_move_app("spotify.exe", Some("fone".to_string()));
+        assert!(com_destino.ok, "{com_destino:?}");
+        assert!(com_destino.changed);
+        assert_eq!(com_destino.error_code, None);
+
+        // O caminho "Padrão" (limpeza) também não herda o latch.
+        let limpando = engine.act_move_app("spotify.exe", None);
+        assert!(limpando.ok, "{limpando:?}");
+        assert!(limpando.changed);
+        assert_eq!(limpando.error_code, None);
+    }
+
+    #[test]
+    fn move_app_reports_unsupported_when_clearing_the_route_is_unsupported() {
+        // Minor 19: `clear_route` esbarra em `Unsupported` e o erro era descartado.
+        let dir = tempfile::tempdir().unwrap();
+        save_rules(dir.path(), vec![rule("chrome.exe", Flow::Render, "fone")]);
+        let (world, engine) = move_app_setup(dir.path());
+        world.backend.unsupported.store(true, Ordering::SeqCst);
+
+        let result = engine.act_move_app("chrome.exe", None);
+
+        // A regra saiu (sucesso parcial), mas a rota da sessão não foi limpa.
+        assert!(!result.ok, "{result:?}");
+        assert!(result.changed);
+        assert_eq!(result.error_code, Some(ErrorCode::Unsupported));
+        assert!(engine.state().rules.is_empty());
     }
 
     #[test]
