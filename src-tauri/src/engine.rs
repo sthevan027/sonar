@@ -584,7 +584,7 @@ impl Engine {
     }
 
     /// Escreve o mudo no endpoint e guarda o valor novo. Não segura `apply`: quem chama
-    /// (`act_output_mute`) já segura.
+    /// decide se segura (`act_output_mute` segura; `set_device_muted` não).
     fn write_device_muted(&self, id: &DeviceId, m: bool) -> Result<(), AudioError> {
         self.ctl.set_muted(id, m)?;
         {
@@ -734,7 +734,6 @@ fn build_state(inner: &Inner) -> AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actions::ErrorCode;
     use crate::audio::default_device::DefaultDevice;
     use crate::audio::endpoint::EndpointControl;
     use crate::audio::types::{AudioError, AudioSession, Device};
@@ -744,7 +743,9 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     // ---------- fakes ----------
 
@@ -887,7 +888,7 @@ mod tests {
         fail_reads: AtomicBool,
         /// Escritas falham quando verdadeiro; a chamada continua gravada.
         fail_writes: AtomicBool,
-        /// O endpoint sumiu: ler o mudo dele devolve `Gone`.
+        /// O endpoint sumiu: ler o mudo dele devolve `Gone` e escrever nele também falha.
         gone: AtomicBool,
         /// Leituras feitas (volume, mudo, pico), para provar que a escolha de rota não as repete.
         reads: AtomicUsize,
@@ -1775,6 +1776,7 @@ mod tests {
             .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
         engine.refresh();
         let before = world.notes();
+        let reads_before = world.ctl.reads();
 
         let result = engine.act_output_mute(MuteMode::Set(true));
 
@@ -1783,6 +1785,8 @@ mod tests {
         assert!(!result.changed);
         assert_eq!(result.resolved, None);
         assert!(world.ctl.calls().is_empty());
+        // Nem escrita nem leitura: sem saída padrão não se fala com a API do Windows.
+        assert_eq!(world.ctl.reads(), reads_before);
         assert_eq!(world.notes(), before);
     }
 
@@ -1812,6 +1816,83 @@ mod tests {
             state_before.devices[0].muted
         );
         assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn mute_write_failure_keeps_state_and_returns_os_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        engine.refresh();
+        let state_before = engine.state();
+        let before = world.notes();
+        // A leitura do mudo funciona; a escrita é que o Windows recusa.
+        world.ctl.fail_writes.store(true, Ordering::SeqCst);
+
+        let result = engine.act_output_mute(MuteMode::Set(true));
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::OsError));
+        assert!(!result.changed);
+        assert_eq!(result.resolved, None);
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // A escrita foi tentada e falhou: nada de estado guardado, nada de aviso.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetMuted("fone".to_string(), true)]
+        );
+        assert_eq!(
+            engine.state().devices[0].muted,
+            state_before.devices[0].muted
+        );
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn act_output_mute_holds_apply_while_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = Arc::new(world.engine_at(dir.path()));
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        engine.refresh();
+
+        // A thread de teste segura `apply`: a ação não pode passar enquanto a trava existe.
+        let held = engine
+            .apply
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = Arc::clone(&engine);
+        let handle = std::thread::spawn(move || {
+            let _ = tx.send(worker.act_output_mute(MuteMode::Set(true)));
+        });
+
+        // Com `apply` retido, o resultado não chega (a thread pode nem ter começado).
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("a thread da ação morreu antes de devolver o resultado")
+            }
+            Ok(result) => panic!("a ação passou sem esperar a trava `apply`: {result:?}"),
+        }
+
+        // Solta a trava: a ação termina e devolve o resultado.
+        drop(held);
+        let result = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a ação não terminou depois de `apply` ser solta");
+        handle.join().unwrap();
+        assert!(result.ok);
+        assert!(result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("fone"));
     }
 
     #[test]
