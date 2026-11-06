@@ -79,6 +79,11 @@ pub fn set_blur_hide_suspended(app: &AppHandle, suspended: bool) {
 }
 
 pub fn setup(app: &mut App) -> tauri::Result<()> {
+    // Sonda de conflito de atalho (S4): só em depuração e só com a variável `SONAR_PROBE_SHORTCUTS`
+    // definida. Roda antes de o app registrar o atalho guardado.
+    #[cfg(debug_assertions)]
+    probe_shortcuts_from_env(app.handle());
+
     let panel = app
         .get_webview_window(PANEL)
         .ok_or(tauri::Error::WindowNotFound)?;
@@ -292,6 +297,52 @@ impl ShortcutRegistrar for PluginShortcuts<'_> {
     }
 }
 
+/// Sonda de conflito de atalho (spike S4): registra cada acelerador por um instante e solta,
+/// para saber se o Windows aceita registrá-lo. Ela registra e solta, uma tecla por vez, na
+/// ordem: um atalho que falhou não interrompe os outros e nada fica preso no sistema.
+/// Não é o mecanismo de registro do app (esse é o `apply_bindings` da fase F2).
+#[cfg(any(debug_assertions, test))]
+fn probe_shortcuts(
+    registrar: &dyn ShortcutRegistrar,
+    accelerators: &[&str],
+) -> Vec<(String, Result<(), String>)> {
+    accelerators
+        .iter()
+        .map(|accelerator| {
+            let result = registrar.register(accelerator);
+            // Solta sempre, mesmo depois de falhar: a sonda devolve o sistema como achou.
+            registrar.unregister(accelerator);
+            ((*accelerator).to_string(), result)
+        })
+        .collect()
+}
+
+/// Roda a sonda na abertura do app quando a variável `SONAR_PROBE_SHORTCUTS` lista os
+/// aceleradores (separados por vírgula). Só existe em builds de depuração: em release a
+/// variável nem é lida.
+#[cfg(debug_assertions)]
+fn probe_shortcuts_from_env(app: &AppHandle) {
+    let Ok(raw) = std::env::var("SONAR_PROBE_SHORTCUTS") else {
+        return;
+    };
+    let accelerators: Vec<&str> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if accelerators.is_empty() {
+        return;
+    }
+    eprintln!("sonar: sonda de atalhos ({} combinações)", accelerators.len());
+    let registrar = PluginShortcuts { app };
+    for (accelerator, result) in probe_shortcuts(&registrar, &accelerators) {
+        match result {
+            Ok(()) => eprintln!("sonar: sonda OK {accelerator}"),
+            Err(err) => eprintln!("sonar: sonda FALHOU {accelerator}: {err}"),
+        }
+    }
+}
+
 /// Registra o atalho guardado agora. Em falha o atalho anterior segue e a frase vai de volta.
 pub fn apply_shortcut(app: &AppHandle, accelerator: &str) -> Result<(), String> {
     let mut current = locked(&REGISTERED_SHORTCUT);
@@ -434,13 +485,46 @@ mod tests {
     }
 
     #[test]
+    fn probe_reports_each_key_independently() {
+        let registrar = FakeRegistrar::default();
+
+        let results = probe_shortcuts(&registrar, &["Ctrl+Alt+M", "bad+Key", "Ctrl+Alt+Up"]);
+
+        assert_eq!(results.len(), 3);
+        // A ordem é a da lista e cada tecla tem o próprio resultado: a falha de uma não
+        // interrompe as outras.
+        assert_eq!(results[0].0, "Ctrl+Alt+M");
+        assert_eq!(results[0].1, Ok(()));
+        assert_eq!(results[1].0, "bad+Key");
+        assert_eq!(results[1].1, Err("Atalho inválido: bad+Key.".to_string()));
+        assert_eq!(results[2].0, "Ctrl+Alt+Up");
+        assert_eq!(results[2].1, Ok(()));
+        // Cada acelerador é registrado e solto antes do próximo: a sonda não deixa atalho
+        // preso no sistema.
+        assert_eq!(
+            *registrar.calls.borrow(),
+            vec![
+                "register Ctrl+Alt+M".to_string(),
+                "unregister Ctrl+Alt+M".to_string(),
+                "register bad+Key".to_string(),
+                "unregister bad+Key".to_string(),
+                "register Ctrl+Alt+Up".to_string(),
+                "unregister Ctrl+Alt+Up".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn every_shortcut_the_settings_screen_can_produce_parses() {
         // Mesmo conjunto de `shortcutFromKeys` (src/screens/settingsModel.ts): Ctrl, Alt,
-        // Shift e Super, com pelo menos Ctrl, Alt ou Super; tecla letra, dígito ou F1 a F12.
+        // Shift e Super, com pelo menos Ctrl, Alt ou Super; tecla letra, dígito, F1 a F12
+        // ou uma das setas (Up, Down).
         let modifiers = ["Ctrl", "Alt", "Shift", "Super"];
         let mut mains: Vec<String> = ('A'..='Z').map(|c| c.to_string()).collect();
         mains.extend((0..=9).map(|d| d.to_string()));
         mains.extend((1..=12).map(|f| format!("F{f}")));
+        mains.push("Up".to_string());
+        mains.push("Down".to_string());
         let mut checked = 0;
         for mask in 0u32..16 {
             let chosen: Vec<&str> = modifiers
@@ -464,8 +548,10 @@ mod tests {
                 checked += 1;
             }
         }
-        // 14 combinações de modificadores (16 menos as que são só Shift) x 48 teclas principais.
-        assert_eq!(checked, 14 * 48);
+        // 14 combinações de modificadores (16 máscaras menos a vazia e a de só Shift) x 50 teclas
+        // principais (26 letras + 10 dígitos + 12 teclas F + Up + Down).
+        assert_eq!(mains.len(), 26 + 10 + 12 + 2);
+        assert_eq!(checked, 14 * 50);
         assert!("Super+Alt+V".parse::<Shortcut>().is_ok());
     }
 }

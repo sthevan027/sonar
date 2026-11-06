@@ -34,13 +34,17 @@ export type ShortcutOutcome =
 
 const MODIFIER_CODE = /^(Control|Shift|Alt|Meta|OS|AltGraph)(Left|Right)?$/;
 
-/** Tecla principal pelo `code` (independe do layout): letras, números e F1 a F12. */
+/** Tecla principal pelo `code` (independe do layout): letras, números, F1 a F12 e as setas
+ *  para cima e para baixo. */
 function mainKeyOf(code: string): string | null {
   const letter = /^Key([A-Z])$/.exec(code);
   if (letter) return letter[1];
   const digit = /^Digit([0-9])$/.exec(code);
   if (digit) return digit[1];
   if (/^F([1-9]|1[0-2])$/.test(code)) return code;
+  // Só as setas para cima e para baixo viram atalho: as laterais são navegação de menu.
+  if (code === "ArrowUp") return "Up";
+  if (code === "ArrowDown") return "Down";
   return null;
 }
 
@@ -56,7 +60,7 @@ export function shortcutFromKeys(input: KeyInput): ShortcutOutcome {
   if (MODIFIER_CODE.test(input.code)) return { status: "wait" };
   const main = mainKeyOf(input.code);
   if (main === null) {
-    return { status: "invalid", message: "Use letras, números ou F1 a F12." };
+    return { status: "invalid", message: "Use letras, números, F1 a F12 ou as setas para cima e para baixo." };
   }
   const modifiers: string[] = [];
   if (input.ctrlKey) modifiers.push("Ctrl");

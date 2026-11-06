@@ -166,4 +166,55 @@ describe("Settings", () => {
       status: "invalid",
     });
   });
+
+  it("shortcut_capture_accepts_up_and_down_arrows", () => {
+    const none = { altKey: false, shiftKey: false, metaKey: false, ctrlKey: false };
+    expect(shortcutFromKeys({ code: "ArrowUp", ...none, ctrlKey: true, altKey: true })).toEqual({
+      status: "ok",
+      shortcut: "Ctrl+Alt+Up",
+    });
+    expect(shortcutFromKeys({ code: "ArrowDown", ...none, ctrlKey: true, altKey: true })).toEqual({
+      status: "ok",
+      shortcut: "Ctrl+Alt+Down",
+    });
+    // As setas laterais continuam recusadas: só sobe e desce são teclas de atalho.
+    expect(shortcutFromKeys({ code: "ArrowLeft", ...none, ctrlKey: true })).toMatchObject({
+      status: "invalid",
+    });
+    expect(shortcutFromKeys({ code: "ArrowRight", ...none, ctrlKey: true })).toMatchObject({
+      status: "invalid",
+    });
+  });
+
+  it("shortcut_capture_can_produce_every_combination_it_allows", () => {
+    // Mesmo conjunto do `mainKeyOf`: 26 letras + 10 dígitos + 12 teclas F + as duas setas.
+    const codes = [
+      ...[..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map((letter) => `Key${letter}`),
+      ...[..."0123456789"].map((digit) => `Digit${digit}`),
+      ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`),
+      "ArrowUp",
+      "ArrowDown",
+    ];
+    const modifiers = ["ctrlKey", "altKey", "shiftKey", "metaKey"] as const;
+    const shortcuts = new Set<string>();
+    for (let mask = 0; mask < 16; mask += 1) {
+      const chosen = modifiers.filter((_, i) => (mask & (1 << i)) !== 0);
+      // Shift sozinho não conta: sem Ctrl, Alt ou Win não há atalho global.
+      if (!chosen.some((m) => m !== "shiftKey")) continue;
+      for (const code of codes) {
+        const outcome = shortcutFromKeys({
+          code,
+          ctrlKey: chosen.includes("ctrlKey"),
+          altKey: chosen.includes("altKey"),
+          shiftKey: chosen.includes("shiftKey"),
+          metaKey: chosen.includes("metaKey"),
+        });
+        expect(outcome.status).toBe("ok");
+        if (outcome.status === "ok") shortcuts.add(outcome.shortcut);
+      }
+    }
+    // 14 combinações de modificadores (16 máscaras menos a vazia e a de só Shift) x 50 teclas.
+    expect(codes.length).toBe(50);
+    expect(shortcuts.size).toBe(700);
+  });
 });
