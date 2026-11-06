@@ -9,6 +9,10 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{App, AppHandle, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
+use crate::actions::Action;
+use crate::action_runtime;
+use crate::bindings;
+use crate::dispatcher::Dispatcher;
 use crate::shell_geometry::{corner_fallback, place_near_tray, Rect, Size};
 use crate::state::Settings;
 
@@ -139,7 +143,7 @@ pub fn setup(app: &mut App) -> tauri::Result<()> {
                 ..
             } = event
             {
-                toggle_panel(app, &hidden_at);
+                alterna_pelo_dispatcher(app);
             }
         })
         .build(app)?;
@@ -179,26 +183,48 @@ pub fn show_panel(app: &AppHandle) {
     }
 }
 
-fn toggle_panel(app: &AppHandle, hidden_at: &HiddenAt) {
+/// Alterna o painel. Devolve se o estado mudou de fato (`false` quando o painel não
+/// existe ou quando o clique foi o que tirou o foco dele).
+fn toggle_panel(app: &AppHandle, hidden_at: &HiddenAt) -> bool {
     let Some(panel) = app.get_webview_window(PANEL) else {
-        return;
+        return false;
     };
     if panel.is_visible().unwrap_or(false) {
         let _ = panel.hide();
-        return;
+        return true;
     }
     let just_hidden_by_blur = lock(hidden_at).is_some_and(|at| at.elapsed() < BLUR_GRACE);
-    if !just_hidden_by_blur {
-        show(&panel);
+    if just_hidden_by_blur {
+        return false;
     }
+    show(&panel);
+    true
 }
 
 /// Atalho global: alterna o painel pelo mesmo caminho da bandeja (graça e suspensão valem).
-pub fn toggle_from_shortcut(app: &AppHandle) {
+///
+/// O painel é do app, não do motor de áudio: é por aqui que a ação `TogglePanel` chega
+/// quando o `AppExecutor` a executa.
+pub fn toggle_from_shortcut(app: &AppHandle) -> bool {
     let Some(hidden_at) = app.try_state::<HiddenAt>() else {
+        return false;
+    };
+    toggle_panel(app, &hidden_at)
+}
+
+/// O clique na bandeja vira uma ação: o painel alterna pelo mesmo caminho do atalho.
+///
+/// A ação entra na fila; quem executa é o worker do `Dispatcher`. Sem fila (o app ainda
+/// está abrindo), o clique vai pelo caminho direto — perder o clique seria pior.
+fn alterna_pelo_dispatcher(app: &AppHandle) {
+    let Some(dispatcher) = app.try_state::<Dispatcher>() else {
+        if let Some(hidden_at) = app.try_state::<HiddenAt>() {
+            toggle_panel(app, &hidden_at);
+        }
         return;
     };
-    toggle_panel(app, &hidden_at);
+    let avisar = action_runtime::notificador(app);
+    action_runtime::submit(&dispatcher, Action::TogglePanel, &avisar);
 }
 
 fn show(panel: &WebviewWindow) {
@@ -384,6 +410,22 @@ pub fn set_autostart(_enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Registra um atalho global que ainda não está registrado.
+///
+/// Já registrado (o atalho legado das configurações ocupa a mesma combinação): nada a
+/// fazer — registrar de novo seria recusado pelo plugin.
+fn register_binding(app: &AppHandle, accelerator: &str) -> Result<(), String> {
+    let shortcut: Shortcut = accelerator
+        .parse()
+        .map_err(|_| format!("Atalho inválido: {accelerator}."))?;
+    if app.global_shortcut().is_registered(shortcut) {
+        return Ok(());
+    }
+    app.global_shortcut().register(shortcut).map_err(|_| {
+        format!("Não foi possível registrar o atalho {accelerator}. Outro programa pode estar usando essa combinação.")
+    })
+}
+
 /// Aplica o que foi salvo ao abrir o app: atalho e "Iniciar com o Windows" (que re-grava o
 /// caminho do executável, caso ele tenha mudado). Falha vira aviso no log: o app segue.
 pub fn apply_at_startup(app: &AppHandle, settings: &Settings) {
@@ -392,6 +434,13 @@ pub fn apply_at_startup(app: &AppHandle, settings: &Settings) {
     }
     if let Err(err) = set_autostart(settings.autostart) {
         eprintln!("sonar: {err}");
+    }
+    // Os atalhos padrão entram um a um: um que falhe (combinação ocupada por outro
+    // programa) não impede os demais de ficarem registrados.
+    for binding in bindings::default_bindings() {
+        if let Err(err) = register_binding(app, &binding.accelerator) {
+            eprintln!("sonar: {err}");
+        }
     }
 }
 

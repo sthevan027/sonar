@@ -1,9 +1,11 @@
 mod shell;
 mod shell_geometry;
-#[allow(dead_code)] // Task 8 consome o dispatcher; até lá só os testes o usam.
+#[allow(dead_code)] // `spawn` (janela manual) só é usada nos testes; o resto é consumido pelo app.
 mod dispatcher;
-#[allow(dead_code)] // Tarefas seguintes (F1) consomem os tipos de ação; até lá só os testes os usam.
+#[allow(dead_code)] // As variantes de `ErrorCode` que ainda não têm ação ficam sem construção; o allow cobre o módulo.
 mod actions;
+mod action_runtime;
+mod bindings;
 #[allow(dead_code)] // Tasks seguintes consomem o roteador; até lá só os testes o usam.
 mod audio;
 #[allow(dead_code)] // Task 9 consome as regras; até lá só os testes o usam.
@@ -31,6 +33,7 @@ use audio::endpoint::WindowsEndpoint;
 use audio::policy::WindowsRouteBackend;
 use audio::types::AudioEvent;
 use commands::MicLevel;
+use dispatcher::Dispatcher;
 use engine::Engine;
 use state::AppState;
 use store::Store;
@@ -53,12 +56,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Atualização: checa o endpoint de `plugins.updater` (tauri.conf.json) e verifica a assinatura.
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // O atalho global alterna o painel pelo mesmo caminho da bandeja (shell::toggle_from_shortcut).
+        // O atalho global vira uma ação e entra na fila: o handler não executa nada, ele
+        // só enfileira. Quem executa é o worker do `Dispatcher`.
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        shell::toggle_from_shortcut(app);
+                        let Some(dispatcher) = app.try_state::<Dispatcher>() else {
+                            return;
+                        };
+                        let bindings = tabela_de_atalhos(app);
+                        let avisar = action_runtime::notificador(app);
+                        action_runtime::enfileirar_atalho(&dispatcher, &bindings, shortcut, &avisar);
                     }
                 })
                 .build(),
@@ -87,6 +96,7 @@ pub fn run() {
             commands::list_running_apps,
             commands::app_icon,
             commands::set_blur_hide_suspended,
+            commands::dispatch_action,
             updates::check_for_update,
             updates::install_update,
             updates::pending_update,
@@ -120,6 +130,25 @@ fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
         }),
     ));
     app.manage(engine.clone());
+
+    // A fila de ações: é por ela que atalho, bandeja e IPC passam. O executor sabe mexer
+    // no painel; o `report` publica no painel o que não deu certo.
+    let executor = Arc::new(action_runtime::AppExecutor::new(
+        engine.clone(),
+        app_handle.clone(),
+    ));
+    let avisar = action_runtime::notificador(&app_handle);
+    let report: Arc<dyn Fn(&actions::Action, &actions::ActionResult) + Send + Sync> =
+        Arc::new(move |acao: &actions::Action, resultado: &actions::ActionResult| {
+            // O evento sai só quando a ação não deu certo (Ruling 17). Um sucesso parcial
+            // (`ok == false`, `changed == true`) também sai: o usuário precisa saber que
+            // o pedido foi cumprido só pela metade.
+            if !resultado.ok {
+                avisar(acao, resultado);
+            }
+        });
+    let dispatcher = Dispatcher::spawn_default(executor, report);
+    app.manage(dispatcher);
     // Atalho e "Iniciar com o Windows" guardados valem desde a abertura.
     shell::apply_at_startup(&app_handle, &engine.settings());
 
@@ -221,6 +250,30 @@ fn panel_visible(app: &AppHandle) -> bool {
     app.get_webview_window(PANEL)
         .and_then(|window| window.is_visible().ok())
         .unwrap_or(false)
+}
+
+/// A tabela de atalhos valendo agora: os padrão do app mais o atalho legado das
+/// configurações (que ainda alterna o painel).
+///
+/// O atalho legado entra na tabela enquanto a Task 14 não unificar as duas coisas: sem
+/// ele, o atalho que o usuário salvou deixaria de funcionar.
+fn tabela_de_atalhos(app: &AppHandle) -> Vec<bindings::Binding> {
+    let mut tabela = bindings::default_bindings();
+    let legado = app
+        .try_state::<Arc<Engine>>()
+        .map(|engine| engine.settings().shortcut);
+    if let Some(legado) = legado {
+        let ja_existe = tabela
+            .iter()
+            .any(|binding| binding.accelerator.eq_ignore_ascii_case(&legado));
+        if !ja_existe {
+            tabela.push(bindings::Binding {
+                accelerator: legado,
+                action: actions::Action::TogglePanel,
+            });
+        }
+    }
+    tabela
 }
 
 /// Ferramenta de desenvolvimento: com `SONAR_DEBUG_STATE` definida, imprime o primeiro

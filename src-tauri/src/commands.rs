@@ -1,6 +1,7 @@
 //! Comandos do Tauri: camada fina sobre o `Engine`. Quem tem erro devolve `String` com
 //! uma frase curta em português. Os nomes são os que a interface chama (`src/api.ts`).
 
+use crate::actions::{Action, ActionExecutor, ActionResult};
 use crate::apps::{self, RunningApp};
 use crate::audio::types::{AudioError, DeviceId, Flow};
 use crate::engine::Engine;
@@ -169,4 +170,69 @@ pub fn save_settings(app: AppHandle, engine: Eng<'_>, settings: Settings) -> Res
     shell::apply_settings(&app, &engine.settings(), &settings)?;
     engine.save_settings(settings);
     Ok(())
+}
+
+/// Executa uma ação vinda da interface, direto pelo `Engine`.
+///
+/// O comando **não** passa pela fila: a fila existe para quem produz de fora (atalho,
+/// bandeja) e não pode esperar. Aqui a interface espera o resultado, então a ação roda na
+/// hora e devolve o que o executor devolveu.
+///
+/// **A trava `apply` nunca é segurada aqui.** Ela é um `Mutex` do std (não reentrante) e
+/// pertence ao `Engine`: cada `act_*` a segura por conta própria.
+#[tauri::command(async)]
+pub fn dispatch_action(engine: Eng<'_>, action: Action) -> ActionResult {
+    executa(&engine, action)
+}
+
+/// O núcleo do comando: o executor decide, o comando só repassa o resultado.
+///
+/// Camada fina de propósito — é o que o comando `dispatch_action` é.
+fn executa(engine: &Engine, action: Action) -> ActionResult {
+    engine.execute(action)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::default_device::WindowsDefaultDevice;
+    use crate::audio::devices::WindowsAudioSource;
+    use crate::audio::endpoint::WindowsEndpoint;
+    use crate::audio::policy::WindowsRouteBackend;
+    use crate::store::Store;
+
+    /// Motor de verdade, com os backends do Windows: a ação escolhida não toca no sistema
+    /// (o `Engine` ainda não sabe mexer no painel), o que mantém o teste hermético.
+    fn motor(dir: &std::path::Path) -> Engine {
+        Engine::new(
+            Arc::new(WindowsAudioSource),
+            Arc::new(WindowsRouteBackend::new()),
+            Arc::new(WindowsEndpoint),
+            Arc::new(WindowsDefaultDevice),
+            Store::open(dir.to_path_buf()),
+            Arc::new(|_state: &AppState| {}),
+        )
+    }
+
+    #[test]
+    fn dispatch_action_returns_the_executor_result() {
+        // O comando é uma camada fina: devolve exatamente o que o executor devolveu,
+        // sem trocar nada pelo caminho.
+        let dir = tempfile::tempdir().unwrap();
+        let engine = motor(dir.path());
+        let acao = Action::TogglePanel;
+
+        let esperado = engine.execute(acao.clone());
+        let obtido = executa(&engine, acao);
+
+        assert_eq!(obtido, esperado, "o comando alterou o resultado do executor");
+        assert!(!obtido.ok, "o painel ainda não é do `Engine`: a ação não está disponível");
+    }
+
+    #[test]
+    fn acao_desconhecida_e_rejeitada_pelo_ipc() {
+        // O tipo da ação vem da interface: um tipo desconhecido não vira ação.
+        let erro = serde_json::from_str::<Action>(r#"{"type":"mute_everything"}"#).unwrap_err();
+        assert!(erro.to_string().contains("mute_everything"));
+    }
 }
