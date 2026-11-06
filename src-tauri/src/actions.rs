@@ -153,12 +153,13 @@ impl ActionExecutor for Engine {
             Action::StepOutputVolume { delta } => self.act_output_volume(VolumeMode::Step(delta)),
             Action::SetOutputVolume { value } => self.act_output_volume(VolumeMode::Set(value)),
             Action::SetAppMute { exe, muted } => self.act_app_mute(&exe, muted),
-            // Ações que ainda não existem: painel (AppExecutor da Task 8), mover app
-            // (Task 15), próximo perfil (Task 18) e trocar a saída padrão (Task 19).
-            Action::TogglePanel
-            | Action::CycleProfile { .. }
-            | Action::MoveApp { .. }
-            | Action::CycleDefaultOutput { .. } => {
+            // Mover app (Task 15), ciclar perfil (Task 18) e ciclar saída padrão (Task 19).
+            Action::MoveApp { exe, device } => self.act_move_app(&exe, device),
+            Action::CycleProfile { direction } => self.act_cycle_profile(direction),
+            Action::CycleDefaultOutput { direction } => self.act_cycle_output(direction),
+            // O painel não é do `Engine`: quem abre a janela é a `AppExecutor` (Task 8).
+            // A Task 20 não implementa ação nenhuma.
+            Action::TogglePanel => {
                 ActionResult::failed(ErrorCode::Unsupported, "Ação ainda não disponível.")
             }
         }

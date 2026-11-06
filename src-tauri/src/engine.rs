@@ -12,7 +12,7 @@
 //! de dados: é a parte lenta. Escolher a saída de um app não relê nada: aplica a regra às
 //! sessões já conhecidas daquele app e atualiza só elas.
 
-use crate::actions::{ActionResult, ErrorCode, audio_failure};
+use crate::actions::{ActionResult, Direction, ErrorCode, audio_failure};
 use crate::apps::{ExeRequest, parse_exe_request};
 use crate::audio::default_device::DefaultDevice;
 use crate::audio::endpoint::{clamp_volume, EndpointControl};
@@ -194,12 +194,25 @@ impl Engine {
     /// Não relê o sistema: a sessão ganha o dispositivo novo na hora e a próxima releitura
     /// confirma. Se o app ainda não tiver sessão conhecida, a regra vale quando ela aparecer.
     pub fn set_app_route(&self, exe: &str, flow: Flow, device: Option<DeviceId>) {
-        let exe = exe.to_lowercase();
         {
             let _apply = guard(&self.apply);
+            self.route_locked(exe, flow, device);
+        }
+        self.persist("rules", |inner| inner.rules.clone());
+        self.emit();
+    }
+
+    /// Corpo de `set_app_route`: **quem chama já segura `apply`** (o `Mutex` não é
+    /// reentrante). Não grava em disco nem avisa a interface. Devolve se o conjunto de
+    /// regras mudou de fato (comparação antes/depois).
+    fn route_locked(&self, exe: &str, flow: Flow, device: Option<DeviceId>) -> bool {
+        let exe = exe.to_lowercase();
+        let rules_changed;
+        {
             let (devices, sessions) = {
                 let mut inner = self.lock();
                 inner.generation += 1;
+                let before = inner.rules.clone();
                 match &device {
                     Some(device) => inner.rules.upsert(Rule {
                         exe: exe.clone(),
@@ -208,6 +221,7 @@ impl Engine {
                     }),
                     None => inner.rules.remove(&exe, flow),
                 }
+                rules_changed = inner.rules != before;
                 (inner.devices.clone(), inner.sessions.clone())
             };
             match device {
@@ -246,8 +260,7 @@ impl Engine {
                 }
             }
         }
-        self.persist("rules", |inner| inner.rules.clone());
-        self.emit();
+        rules_changed
     }
 
     /// Ativa um perfil. `false` quando o id não existe (nada muda e nada é avisado).
@@ -607,6 +620,105 @@ impl Engine {
         ActionResult::done(report.changed, Some(id.to_string()))
     }
 
+    /// Manda um app para um dispositivo (A9); `None` — ou o texto `Padrão`/`Default` — volta
+    /// ao padrão do Windows. Dispositivo ausente **não** é erro: a regra fica guardada e vale
+    /// quando ele voltar.
+    ///
+    /// `changed` compara as regras antes e depois, dentro de `apply`: gravar a regra que já
+    /// existia não muda nada. `apply` é segurado em um nível só e solto antes de gravar em
+    /// disco e avisar a interface.
+    pub fn act_move_app(&self, exe: &str, device: Option<String>) -> ActionResult {
+        let Some(request) = parse_exe_request(exe) else {
+            return ActionResult::failed(
+                ErrorCode::InvalidExe,
+                "O nome do aplicativo não é válido.",
+            );
+        };
+        let key = exe_key(request);
+        // A normalização vem antes de resolver o id: só o rótulo vira `None`.
+        let device = device.filter(|d| !is_default_label(d)).map(DeviceId);
+        let (changed, routing_available) = {
+            let _apply = guard(&self.apply);
+            let changed = self.route_locked(&key, Flow::Render, device);
+            (changed, self.lock().routing_available)
+        };
+        if changed {
+            self.persist("rules", |inner| inner.rules.clone());
+        }
+        self.emit();
+        if !routing_available {
+            let message = "Este Windows não permite essa operação.";
+            // A regra pode ter sido gravada mesmo sem o roteamento: sucesso parcial.
+            return if changed {
+                ActionResult::partial(
+                    ActionResult::done(true, Some(key)),
+                    ErrorCode::Unsupported,
+                    message,
+                )
+            } else {
+                ActionResult::failed(ErrorCode::Unsupported, message)
+            };
+        }
+        ActionResult::done(changed, Some(key))
+    }
+
+    /// Passa para o perfil seguinte ou anterior (A3). A ordem é a de `profiles`; o cursor é
+    /// `last_profile`, só em memória. Sem cursor (ou com o perfil já apagado), `Next` vai ao
+    /// primeiro e `Prev` ao último.
+    ///
+    /// Não segura `apply`: a ativação adquire a trava por conta própria.
+    pub fn act_cycle_profile(&self, dir: Direction) -> ActionResult {
+        let target = {
+            let inner = self.lock();
+            let count = inner.profiles.len();
+            if count == 0 {
+                return ActionResult::failed(ErrorCode::NoProfiles, "Nenhum perfil criado.");
+            }
+            let current = inner
+                .last_profile
+                .as_deref()
+                .and_then(|id| inner.profiles.iter().position(|p| p.id == id));
+            let next = cycle_index(current, count, dir);
+            if current == Some(next) {
+                // Um perfil só, e já é o ativo: o ciclo não tem para onde ir.
+                return ActionResult::failed(
+                    ErrorCode::NoProfiles,
+                    "É preciso ao menos dois perfis para alternar.",
+                );
+            }
+            inner.profiles[next].id.clone()
+        };
+        self.act_activate_profile(&target)
+    }
+
+    /// Troca a saída padrão do Windows pela seguinte ou anterior entre as visíveis (A10).
+    /// Se a padrão estiver oculta, `Next` vai à primeira e `Prev` à última.
+    ///
+    /// A escolha e a troca acontecem sob `apply` (dois atalhos seguidos não escolhem a mesma
+    /// saída); a releitura vem depois, fora da trava, porque `refresh()` adquire `apply`.
+    pub fn act_cycle_output(&self, dir: Direction) -> ActionResult {
+        let target = {
+            let _apply = guard(&self.apply);
+            let outputs = self.visible_outputs();
+            if outputs.len() < 2 {
+                return ActionResult::failed(
+                    ErrorCode::NotEnoughOutputs,
+                    "É preciso ao menos duas saídas.",
+                );
+            }
+            let current = self
+                .default_render()
+                .and_then(|id| outputs.iter().position(|o| *o == id));
+            let target = outputs[cycle_index(current, outputs.len(), dir)].clone();
+            if let Err(err) = self.defaults.set_default(&target, Flow::Render) {
+                return audio_failure(&err);
+            }
+            target
+        };
+        self.refresh();
+        ActionResult::done(true, Some(target.0))
+    }
+
     /// Troca o padrão do Windows no sentido.
     pub fn set_default_device(&self, id: &DeviceId, flow: Flow) -> Result<(), AudioError> {
         self.defaults.set_default(id, flow)?;
@@ -651,7 +763,6 @@ impl Engine {
     }
 
     /// Saídas conectadas e visíveis, na ordem dos dispositivos. É a ordem do painel.
-    #[allow(dead_code)] // Tarefas seguintes (F1) consomem este resolvedor; até lá só os testes o usam.
     pub fn visible_outputs(&self) -> Vec<DeviceId> {
         let inner = self.lock();
         inner
@@ -827,6 +938,22 @@ fn exe_key(request: ExeRequest<'_>) -> String {
     match request {
         ExeRequest::Name(name) => name.to_lowercase(),
         ExeRequest::Path(path) => exe_file_name(path).to_lowercase(),
+    }
+}
+
+/// Rótulo que a interface usa para "voltar ao padrão do Windows" no lugar de um id.
+fn is_default_label(text: &str) -> bool {
+    matches!(text.trim().to_lowercase().as_str(), "padrão" | "default")
+}
+
+/// Próxima posição de um ciclo de `count` itens (`count > 0`). Sem posição atual, `Next`
+/// vai ao primeiro e `Prev` ao último; com ela, dá a volta nas pontas.
+fn cycle_index(current: Option<usize>, count: usize, dir: Direction) -> usize {
+    match (current, dir) {
+        (None, Direction::Next) => 0,
+        (None, Direction::Prev) => count - 1,
+        (Some(at), Direction::Next) => (at + 1) % count,
+        (Some(at), Direction::Prev) => (at + count - 1) % count,
     }
 }
 
@@ -1278,6 +1405,8 @@ mod tests {
     struct FakeDefaults {
         calls: Mutex<Vec<(DeviceId, Flow)>>,
         fail: AtomicBool,
+        /// O dispositivo sumiu: a troca devolve `Gone`.
+        gone: AtomicBool,
     }
 
     impl FakeDefaults {
@@ -1289,6 +1418,9 @@ mod tests {
     impl DefaultDevice for FakeDefaults {
         fn set_default(&self, id: &DeviceId, flow: Flow) -> Result<(), AudioError> {
             self.calls.lock().unwrap().push((id.clone(), flow));
+            if self.gone.load(Ordering::SeqCst) {
+                return Err(AudioError::Gone);
+            }
             if self.fail.load(Ordering::SeqCst) {
                 return Err(AudioError::Os(-4));
             }
@@ -3248,6 +3380,382 @@ mod tests {
         assert_eq!(result.resolved.as_deref(), Some("p1"));
     }
 
+    // ---------- A9: mover app ----------
+
+    /// Motor com o fone conhecido e uma sessão do Chrome tocando nele.
+    fn move_app_setup(dir: &Path) -> (World, Engine) {
+        let world = World::new();
+        let engine = world.engine_at(dir);
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(10, "chrome.exe", Flow::Render, "fone")]);
+        engine.refresh();
+        (world, engine)
+    }
+
+    #[test]
+    fn move_app_stores_rule_for_absent_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let (world, engine) = move_app_setup(dir.path());
+
+        let result = engine.act_move_app("Chrome.EXE", Some("fantasma".to_string()));
+
+        // Dispositivo ausente não é erro: a regra fica guardada para quando ele voltar.
+        assert!(result.ok, "{result:?}");
+        assert!(result.changed);
+        assert_eq!(result.error_code, None);
+        assert_eq!(result.resolved.as_deref(), Some("chrome.exe"));
+        assert_eq!(
+            engine.state().rules,
+            vec![rule("chrome.exe", Flow::Render, "fantasma")]
+        );
+        assert!(world.backend.set_calls().is_empty());
+    }
+
+    #[test]
+    fn move_app_with_none_clears_the_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        save_rules(dir.path(), vec![rule("chrome.exe", Flow::Render, "fone")]);
+        let (_world, engine) = move_app_setup(dir.path());
+
+        let result = engine.act_move_app("chrome.exe", None);
+
+        assert!(result.ok, "{result:?}");
+        assert!(result.changed);
+        assert!(engine.state().rules.is_empty());
+        // Limpar uma regra que já não existe não muda nada.
+        let again = engine.act_move_app("chrome.exe", None);
+        assert!(again.ok);
+        assert!(!again.changed);
+    }
+
+    #[test]
+    fn move_app_reports_unsupported_when_backend_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let (world, engine) = move_app_setup(dir.path());
+        world.backend.unsupported.store(true, Ordering::SeqCst);
+
+        let result = engine.act_move_app("chrome.exe", Some("fone".to_string()));
+
+        // A regra foi gravada, mas o roteamento não deu: sucesso parcial (Ruling 35).
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::Unsupported));
+        assert!(result.changed, "a regra foi gravada: o estado mudou");
+        assert_eq!(
+            result.message.as_deref(),
+            Some("Este Windows não permite essa operação.")
+        );
+        assert_eq!(
+            engine.state().rules,
+            vec![rule("chrome.exe", Flow::Render, "fone")]
+        );
+    }
+
+    #[test]
+    fn move_app_rejects_invalid_exe() {
+        let dir = tempfile::tempdir().unwrap();
+        let (world, engine) = move_app_setup(dir.path());
+        let notes = world.notes();
+
+        for bad in ["", "chrome", "..\\chrome.exe", "\\\\srv\\x\\chrome.exe"] {
+            let result = engine.act_move_app(bad, Some("fone".to_string()));
+            assert!(!result.ok, "{bad:?}");
+            assert!(!result.changed);
+            assert_eq!(result.error_code, Some(ErrorCode::InvalidExe), "{bad:?}");
+        }
+        assert!(engine.state().rules.is_empty());
+        assert_eq!(world.notes(), notes);
+    }
+
+    #[test]
+    fn move_app_treats_padrao_string_as_absent_device() {
+        for label in ["Padrão", "Default"] {
+            let dir = tempfile::tempdir().unwrap();
+            save_rules(dir.path(), vec![rule("chrome.exe", Flow::Render, "fone")]);
+            let (world, engine) = move_app_setup(dir.path());
+            let calls_before = world.backend.set_calls().len();
+
+            let result = engine.act_move_app("chrome.exe", Some(label.to_string()));
+
+            // Mesma semântica de `None`: a regra some, sem erro e sem rota nova.
+            assert!(result.ok, "{label}: {result:?}");
+            assert!(result.changed, "{label}");
+            assert_eq!(result.error_code, None);
+            assert!(engine.state().rules.is_empty(), "{label}");
+            assert_eq!(world.backend.set_calls().len(), calls_before);
+        }
+    }
+
+    #[test]
+    fn move_app_does_not_touch_a_real_device_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_world, engine) = move_app_setup(dir.path());
+
+        let result = engine.act_move_app("chrome.exe", Some("fone".to_string()));
+
+        assert!(result.ok, "{result:?}");
+        assert_eq!(
+            engine.state().rules,
+            vec![rule("chrome.exe", Flow::Render, "fone")]
+        );
+    }
+
+    #[test]
+    fn move_app_reports_change_only_when_the_rule_differs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_world, engine) = move_app_setup(dir.path());
+
+        let first = engine.act_move_app("chrome.exe", Some("fone".to_string()));
+        let same = engine.act_move_app("CHROME.exe", Some("fone".to_string()));
+        let other = engine.act_move_app("chrome.exe", Some("outro".to_string()));
+
+        assert!(first.changed);
+        assert!(same.ok && !same.changed, "regra idêntica não muda nada");
+        assert!(other.ok && other.changed, "trocar o dispositivo muda");
+    }
+
+    // ---------- A3: ciclar perfil ----------
+
+    fn three_profiles(engine: &Engine) {
+        for id in ["p1", "p2", "p3"] {
+            engine.save_profile(profile(id, vec![])).unwrap();
+        }
+    }
+
+    fn cycled(engine: &Engine, dir: Direction) -> Option<String> {
+        let result = engine.act_cycle_profile(dir);
+        assert!(result.ok, "{result:?}");
+        assert!(result.changed, "{result:?}");
+        result.resolved
+    }
+
+    #[test]
+    fn cycle_wraps_after_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        three_profiles(&engine);
+
+        let ids: Vec<Option<String>> = (0..4).map(|_| cycled(&engine, Direction::Next)).collect();
+
+        let expected: Vec<Option<String>> = ["p1", "p2", "p3", "p1"]
+            .iter()
+            .map(|s| Some(s.to_string()))
+            .collect();
+        assert_eq!(ids, expected);
+        assert_eq!(engine.state().last_profile.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn cycle_prev_wraps_to_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        three_profiles(&engine);
+
+        // Sem cursor, `Prev` vai ao último; depois recua e dá a volta.
+        assert_eq!(cycled(&engine, Direction::Prev).as_deref(), Some("p3"));
+        assert_eq!(cycled(&engine, Direction::Prev).as_deref(), Some("p2"));
+        assert_eq!(cycled(&engine, Direction::Prev).as_deref(), Some("p1"));
+        assert_eq!(cycled(&engine, Direction::Prev).as_deref(), Some("p3"));
+    }
+
+    #[test]
+    fn deleted_current_profile_goes_to_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        three_profiles(&engine);
+        assert!(engine.act_activate_profile("p2").ok);
+
+        engine.delete_profile("p2");
+
+        assert_eq!(cycled(&engine, Direction::Next).as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn no_profiles_is_a_failure_that_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let before = engine.state();
+        let notes = world.notes();
+
+        let result = engine.act_cycle_profile(Direction::Next);
+
+        assert!(!result.ok);
+        assert!(!result.changed);
+        assert_eq!(result.error_code, Some(ErrorCode::NoProfiles));
+        assert_eq!(result.message.as_deref(), Some("Nenhum perfil criado."));
+        assert_eq!(engine.state(), before);
+        assert_eq!(world.notes(), notes);
+    }
+
+    #[test]
+    fn cycle_does_not_persist_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        three_profiles(&engine);
+        assert_eq!(cycled(&engine, Direction::Next).as_deref(), Some("p1"));
+        assert_eq!(cycled(&engine, Direction::Next).as_deref(), Some("p2"));
+
+        // Um motor novo sobre o mesmo diretório começa do primeiro perfil.
+        let reopened = world.engine_at(dir.path());
+
+        assert_eq!(reopened.state().last_profile, None);
+        assert_eq!(cycled(&reopened, Direction::Next).as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn cycle_with_a_single_current_profile_does_nothing_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        engine.save_profile(profile("p1", vec![])).unwrap();
+        assert_eq!(cycled(&engine, Direction::Next).as_deref(), Some("p1"));
+
+        let result = engine.act_cycle_profile(Direction::Next);
+
+        // O ciclo não tem para onde avançar: `failed` com `changed` falso (Ruling 17).
+        assert!(!result.ok);
+        assert!(!result.changed);
+        assert!(result.error_code.is_some());
+        assert!(result.message.is_some());
+    }
+
+    // ---------- A10: ciclar saída padrão ----------
+
+    /// Saídas conectadas, na ordem dada, com `default` como padrão do Windows.
+    fn outputs(ids: &[&str], default: &str) -> Vec<Device> {
+        ids.iter()
+            .map(|id| Device {
+                is_default: *id == default,
+                ..device(id, Flow::Render, true, id)
+            })
+            .collect()
+    }
+
+    /// Simula o Windows aceitando a troca: o padrão da fonte muda e o motor relê.
+    fn windows_switches_default(world: &World, engine: &Engine, ids: &[&str], default: &str) {
+        world.source.set_devices(outputs(ids, default));
+        engine.refresh();
+    }
+
+    #[test]
+    fn cycle_output_skips_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let ids = ["a", "b", "c"];
+        world.source.set_devices(outputs(&ids, "a"));
+        engine.refresh();
+        engine
+            .update_device_meta(&dev_id("b"), "b", None, true)
+            .unwrap();
+
+        let first = engine.act_cycle_output(Direction::Next);
+        assert!(first.ok, "{first:?}");
+        assert!(first.changed);
+        assert_eq!(first.resolved.as_deref(), Some("c"));
+        windows_switches_default(&world, &engine, &ids, "c");
+
+        let second = engine.act_cycle_output(Direction::Next);
+        assert_eq!(second.resolved.as_deref(), Some("a"));
+        assert!(second.ok && second.changed);
+        assert_eq!(
+            world.defaults.calls(),
+            vec![(dev_id("c"), Flow::Render), (dev_id("a"), Flow::Render)]
+        );
+    }
+
+    #[test]
+    fn single_output_does_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(outputs(&["a"], "a"));
+        engine.refresh();
+
+        let result = engine.act_cycle_output(Direction::Next);
+
+        assert!(!result.ok);
+        assert!(!result.changed);
+        assert_eq!(result.error_code, Some(ErrorCode::NotEnoughOutputs));
+        assert_eq!(
+            result.message.as_deref(),
+            Some("É preciso ao menos duas saídas.")
+        );
+        assert!(world.defaults.calls().is_empty());
+    }
+
+    #[test]
+    fn cycle_output_when_default_is_hidden_goes_to_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(outputs(&["a", "b", "c"], "b"));
+        engine.refresh();
+        engine
+            .update_device_meta(&dev_id("b"), "b", None, true)
+            .unwrap();
+
+        let result = engine.act_cycle_output(Direction::Next);
+
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.resolved.as_deref(), Some("a"));
+        assert_eq!(world.defaults.calls(), vec![(dev_id("a"), Flow::Render)]);
+    }
+
+    #[test]
+    fn cycle_output_survives_gone_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(outputs(&["a", "b"], "a"));
+        engine.refresh();
+        world.defaults.gone.store(true, Ordering::SeqCst);
+
+        let result = engine.act_cycle_output(Direction::Next);
+
+        assert!(!result.ok);
+        assert!(!result.changed);
+        assert_eq!(result.error_code, Some(ErrorCode::DeviceGone));
+        // O motor segue de pé: a próxima tentativa, com o dispositivo de volta, funciona.
+        world.defaults.gone.store(false, Ordering::SeqCst);
+        let retry = engine.act_cycle_output(Direction::Next);
+        assert!(retry.ok, "{retry:?}");
+        assert_eq!(retry.resolved.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn executor_maps_move_app_and_both_cycles() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(outputs(&["a", "b"], "a"));
+        engine.refresh();
+        engine.save_profile(profile("p1", vec![])).unwrap();
+
+        let moved = engine.execute(Action::MoveApp {
+            exe: "chrome.exe".to_string(),
+            device: Some("a".to_string()),
+        });
+        let profile_cycled = engine.execute(Action::CycleProfile {
+            direction: Direction::Next,
+        });
+        let output_cycled = engine.execute(Action::CycleDefaultOutput {
+            direction: Direction::Next,
+        });
+
+        assert!(moved.ok && moved.changed, "{moved:?}");
+        assert_eq!(profile_cycled.resolved.as_deref(), Some("p1"));
+        assert_eq!(output_cycled.resolved.as_deref(), Some("b"));
+    }
+
     // ---------- executor de ações ----------
 
     #[test]
@@ -3331,19 +3839,8 @@ mod tests {
         let world = World::new();
         let engine = world.engine_at(dir.path());
 
-        for action in [
-            Action::TogglePanel,
-            Action::CycleProfile {
-                direction: Direction::Next,
-            },
-            Action::MoveApp {
-                exe: "chrome.exe".to_string(),
-                device: None,
-            },
-            Action::CycleDefaultOutput {
-                direction: Direction::Prev,
-            },
-        ] {
+        // Só o painel segue sem ação no `Engine`: ele é da `AppExecutor` (Task 8).
+        for action in [Action::TogglePanel] {
             let result = engine.execute(action);
             assert!(!result.ok);
             assert_eq!(result.error_code, Some(ErrorCode::Unsupported));
