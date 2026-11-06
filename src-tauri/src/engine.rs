@@ -286,10 +286,11 @@ impl Engine {
                 let Some(profile) = inner.profiles.iter().find(|p| p.id == id).cloned() else {
                     return ProfileActivation::not_found();
                 };
+                let rules_before = inner.rules.clone();
                 (
                     profile,
-                    inner.rules.clone(),
-                    inner.rules.clone(),
+                    rules_before.clone(),
+                    rules_before,
                     inner.last_profile.clone(),
                 )
             };
@@ -582,10 +583,10 @@ impl Engine {
             // inteiro. `ok` falso e `changed` verdadeiro ao mesmo tempo — a forma honesta.
             Some(err) if changed => {
                 let falha = audio_failure(&err);
-                let code = falha
-                    .error_code
-                    .expect("falha de áudio sempre tem código");
-                let motivo = falha.message.expect("falha de áudio sempre tem frase");
+                // `audio_failure` sempre preenche os dois campos; o `unwrap_or` só evita que
+                // um `AudioError` novo, mal mapeado, derrube o app.
+                let code = falha.error_code.unwrap_or(ErrorCode::Internal);
+                let motivo = falha.message.unwrap_or_default();
                 let message = format!(
                     "O mudo foi aplicado em parte, mas uma sessão não pôde ser mudada: {}",
                     lowercase_first(&motivo)
@@ -750,18 +751,6 @@ impl Engine {
             .map(|d| d.id.clone())
     }
 
-    /// Pids das sessões de um app no sentido, do último sincronismo. O nome do
-    /// executável é comparado sem diferenciar caixa.
-    #[allow(dead_code)] // Tarefas seguintes (F1) consomem este resolvedor; até lá só os testes o usam.
-    pub fn session_pids(&self, exe: &str, flow: Flow) -> Vec<u32> {
-        self.lock()
-            .sessions
-            .iter()
-            .filter(|s| s.flow == flow && s.exe.eq_ignore_ascii_case(exe))
-            .map(|s| s.pid)
-            .collect()
-    }
-
     /// Saídas conectadas e visíveis, na ordem dos dispositivos. É a ordem do painel.
     pub fn visible_outputs(&self) -> Vec<DeviceId> {
         let inner = self.lock();
@@ -769,7 +758,7 @@ impl Engine {
             .devices
             .iter()
             .filter(|d| d.flow == Flow::Render && d.connected)
-            .filter(|d| !inner.meta.get(&d.id.0).map(|m| m.hidden).unwrap_or(false))
+            .filter(|d| !inner.meta.get(&d.id.0).is_some_and(|m| m.hidden))
             .map(|d| d.id.clone())
             .collect()
     }
@@ -1273,7 +1262,8 @@ mod tests {
         fail_reads: AtomicBool,
         /// Escritas falham quando verdadeiro; a chamada continua gravada.
         fail_writes: AtomicBool,
-        /// O endpoint sumiu: ler o mudo dele devolve `Gone` e escrever o mudo nele também falha.
+        /// O endpoint sumiu: ler o mudo dele devolve `Gone`; escrever o mudo ou o volume
+        /// nele também falha.
         gone: AtomicBool,
         /// Pids de sessão que já sumiram do Windows: escrever neles devolve `Gone`.
         gone_sessions: Mutex<Vec<u32>>,
@@ -1360,6 +1350,9 @@ mod tests {
         }
         fn set_volume(&self, id: &DeviceId, v: f32) -> Result<(), AudioError> {
             self.record(CtlCall::SetVolume(id.0.clone(), v))?;
+            if self.gone.load(Ordering::SeqCst) {
+                return Err(AudioError::Gone);
+            }
             self.volumes.lock().unwrap().insert(id.0.clone(), v);
             Ok(())
         }
@@ -2569,6 +2562,8 @@ mod tests {
         assert!(!infinite.ok);
         assert_eq!(infinite.error_code, Some(ErrorCode::InvalidValue));
         assert!(!infinite.changed);
+        assert_eq!(nan.resolved, None);
+        assert_eq!(infinite.resolved, None);
         let message = nan.message.expect("falha precisa de mensagem");
         assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
         // O valor inválido é recusado antes de falar com o endpoint.
@@ -2620,6 +2615,7 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(result.error_code, Some(ErrorCode::OsError));
         assert!(!result.changed);
+        assert_eq!(result.resolved, None);
         let message = result.message.expect("falha precisa de mensagem");
         assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
         // Sem leitura do volume não há escrita: o endpoint não foi tocado.
@@ -2644,6 +2640,7 @@ mod tests {
         engine.refresh();
         let state_before = engine.state();
         let before = world.notes();
+        let gen_before = engine.lock().generation;
         // A leitura do volume funciona; a escrita é que o Windows recusa.
         world.ctl.fail_writes.store(true, Ordering::SeqCst);
 
@@ -2652,6 +2649,9 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(result.error_code, Some(ErrorCode::OsError));
         assert!(!result.changed);
+        assert_eq!(result.resolved, None);
+        // Escrita recusada não conta como mudança: a geração não sobe.
+        assert_eq!(engine.lock().generation, gen_before);
         let message = result.message.expect("falha precisa de mensagem");
         assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
         // A escrita foi tentada e falhou: nada de estado guardado, nada de aviso.
@@ -2663,6 +2663,30 @@ mod tests {
             engine.state().devices[0].volume,
             state_before.devices[0].volume
         );
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn volume_write_on_gone_device_returns_device_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        world.ctl.set_volume_of("fone", 0.5);
+        engine.refresh();
+        let before = world.notes();
+        // A leitura do volume passa; o endpoint some na hora de escrever.
+        world.ctl.gone.store(true, Ordering::SeqCst);
+
+        let result = engine.act_output_volume(VolumeMode::Set(0.2));
+
+        assert!(!result.ok);
+        assert!(!result.changed);
+        assert_eq!(result.error_code, Some(ErrorCode::DeviceGone));
+        assert_eq!(result.resolved, None);
         assert_eq!(world.notes(), before);
     }
 
@@ -2823,25 +2847,6 @@ mod tests {
         }]);
         engine.refresh();
         assert_eq!(engine.default_render(), None);
-    }
-
-    #[test]
-    fn session_pids_matches_exe_case_insensitively_per_flow() {
-        let dir = tempfile::tempdir().unwrap();
-        let world = World::new();
-        let engine = world.engine_at(dir.path());
-        world
-            .source
-            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
-        world.source.set_sessions(vec![
-            session(10, "discord.exe", Flow::Render, "fone"),
-            session(11, "Discord.EXE", Flow::Render, "fone"),
-            session(12, "discord.exe", Flow::Capture, "mic"),
-        ]);
-        engine.refresh();
-
-        assert_eq!(engine.session_pids("Discord.exe", Flow::Render), vec![10, 11]);
-        assert_eq!(engine.session_pids("discord.exe", Flow::Capture), vec![12]);
     }
 
     #[test]
@@ -4381,5 +4386,151 @@ mod tests {
             bak_depois
         );
         assert_eq!(bak_depois, v1);
+    }
+
+    // ---------- paridade: Engine::execute x dispatcher + AppExecutor (SPEC §8) ----------
+
+    /// Mundo igual para os dois caminhos: duas saídas conectadas (a primeira é a padrão),
+    /// um app com sessão de render e dois perfis.
+    fn parity_engine(dir: &Path) -> (World, Engine) {
+        let world = World::new();
+        let engine = world.engine_at(dir);
+        world.source.set_devices(vec![
+            Device {
+                is_default: true,
+                ..device("fone", Flow::Render, true, "Fone")
+            },
+            device("caixa", Flow::Render, true, "Caixa"),
+        ]);
+        world
+            .source
+            .set_sessions(vec![session(10, "discord.exe", Flow::Render, "fone")]);
+        world.ctl.set_volume_of("fone", 0.5);
+        for id in ["p1", "p2"] {
+            engine
+                .save_profile(profile(
+                    id,
+                    vec![ProfileItem {
+                        exe: "discord.exe".to_string(),
+                        output: Target::Device(dev_id("caixa")),
+                        input: Target::Keep,
+                    }],
+                ))
+                .unwrap();
+        }
+        engine.refresh();
+        (world, engine)
+    }
+
+    /// Roda a ação pelo caminho do atalho (fila + worker + `AppExecutor`) e devolve o
+    /// resultado que o worker publicou.
+    fn through_dispatcher(engine: Arc<Engine>, action: Action) -> ActionResult {
+        use crate::action_runtime::AppExecutor;
+        use crate::dispatcher::Dispatcher;
+
+        let (tx, rx) = mpsc::channel::<ActionResult>();
+        let tx = Mutex::new(tx);
+        let dispatcher = Dispatcher::spawn_default(
+            Arc::new(AppExecutor::com_painel(engine, || true)),
+            Arc::new(move |_acao: &Action, resultado: &ActionResult| {
+                let _ = tx.lock().unwrap().send(resultado.clone());
+            }),
+        );
+        dispatcher.submit(action).expect("fila com espaço");
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("o worker não publicou o resultado")
+    }
+
+    /// A mesma ação, em dois mundos iguais: pelo `Engine` direto (o caminho do IPC) e pelo
+    /// dispatcher (o caminho do atalho). Resultado e estado final têm de ser idênticos.
+    fn assert_parity(action: Action) -> ActionResult {
+        let dir_a = tempfile::tempdir().unwrap();
+        let (_world_a, direct) = parity_engine(dir_a.path());
+        let dir_b = tempfile::tempdir().unwrap();
+        let (_world_b, queued) = parity_engine(dir_b.path());
+        let queued = Arc::new(queued);
+
+        let by_engine = direct.execute(action.clone());
+        let by_dispatcher = through_dispatcher(queued.clone(), action.clone());
+
+        assert_eq!(by_engine, by_dispatcher, "resultados diferentes para {action:?}");
+        assert_eq!(direct.state(), queued.state(), "estado diferente para {action:?}");
+        by_engine
+    }
+
+    #[test]
+    fn parity_a2_activate_profile() {
+        let r = assert_parity(Action::ActivateProfile {
+            profile_id: "p1".to_string(),
+        });
+        assert!(r.ok && r.changed, "{r:?}");
+    }
+
+    #[test]
+    fn parity_a3_cycle_profile() {
+        let r = assert_parity(Action::CycleProfile {
+            direction: Direction::Next,
+        });
+        assert!(r.ok && r.changed, "{r:?}");
+    }
+
+    #[test]
+    fn parity_a4_output_mute() {
+        let r = assert_parity(Action::SetOutputMute { muted: true });
+        assert!(r.ok && r.changed, "{r:?}");
+        let r = assert_parity(Action::ToggleOutputMute);
+        assert!(r.ok && r.changed, "{r:?}");
+    }
+
+    #[test]
+    fn parity_a6_step_output_volume() {
+        let r = assert_parity(Action::StepOutputVolume { delta: 0.05 });
+        assert!(r.ok && r.changed, "{r:?}");
+    }
+
+    #[test]
+    fn parity_a7_set_output_volume() {
+        let r = assert_parity(Action::SetOutputVolume { value: 0.3 });
+        assert!(r.ok && r.changed, "{r:?}");
+    }
+
+    #[test]
+    fn parity_a8_app_mute() {
+        let r = assert_parity(Action::SetAppMute {
+            exe: "discord.exe".to_string(),
+            muted: true,
+        });
+        assert!(r.ok && r.changed, "{r:?}");
+    }
+
+    #[test]
+    fn parity_a9_move_app() {
+        let r = assert_parity(Action::MoveApp {
+            exe: "discord.exe".to_string(),
+            device: Some("caixa".to_string()),
+        });
+        assert!(r.ok && r.changed, "{r:?}");
+    }
+
+    #[test]
+    fn parity_a10_cycle_default_output() {
+        let r = assert_parity(Action::CycleDefaultOutput {
+            direction: Direction::Next,
+        });
+        assert!(r.ok && r.changed, "{r:?}");
+    }
+
+    #[test]
+    fn parity_failures_match_too() {
+        // O caminho de erro também é o mesmo: perfil inexistente e app inválido.
+        let r = assert_parity(Action::ActivateProfile {
+            profile_id: "nao-existe".to_string(),
+        });
+        assert_eq!(r.error_code, Some(ErrorCode::ProfileNotFound));
+        let r = assert_parity(Action::SetAppMute {
+            exe: r"\\servidor\pasta\x.exe".to_string(),
+            muted: true,
+        });
+        assert_eq!(r.error_code, Some(ErrorCode::InvalidExe));
     }
 }

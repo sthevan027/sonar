@@ -330,5 +330,11 @@ mod tests {
         let result = audio_failure(&AudioError::Os(-2147024891));
         let message = result.message.expect("falha do Windows precisa de mensagem");
         assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // O HRESULT decimal também é código cru: nenhum dígito do código na frase.
+        assert!(!message.contains("2147024891"), "mensagem com HRESULT: {message}");
+        assert!(
+            !message.chars().any(|c| c.is_ascii_digit()),
+            "mensagem com número: {message}"
+        );
     }
 }

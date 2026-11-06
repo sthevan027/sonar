@@ -5,13 +5,9 @@ mod actions;
 mod action_runtime;
 mod bindings;
 mod hotkeys;
-#[allow(dead_code)] // Tasks seguintes consomem o roteador; até lá só os testes o usam.
 mod audio;
-#[allow(dead_code)] // Task 9 consome as regras; até lá só os testes o usam.
 mod rules;
-#[allow(dead_code)] // Task 9 consome o Store; até lá só os testes o usam.
 mod store;
-#[allow(dead_code)] // Task 9 consome o perfil; até lá só os testes o usam.
 mod profiles;
 mod state;
 mod engine;

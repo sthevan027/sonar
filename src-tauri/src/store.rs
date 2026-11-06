@@ -33,16 +33,11 @@ impl Store {
     }
 
     /// Nunca falha: devolve `T::default()` quando não há dado legível.
+    ///
+    /// É o `load_versioned` sem a versão: o caminho de recuperação (principal, `.corrupt`,
+    /// `.bak`) fica num lugar só.
     pub fn load<T: DeserializeOwned + Default>(&self, name: &str) -> T {
-        let main = self.path(name, ".json");
-        if main.exists() {
-            if let Some(value) = read_document(&main) {
-                return value;
-            }
-            // Ilegível: guarda para diagnóstico e tenta o backup.
-            let _ = fs::rename(&main, self.path(name, ".json.corrupt"));
-        }
-        read_document(&self.path(name, ".json.bak")).unwrap_or_default()
+        self.load_versioned(name).1
     }
 
     /// Lê um documento junto com a versão do formato em que ele está.
@@ -86,13 +81,6 @@ impl Store {
     fn path(&self, name: &str, suffix: &str) -> PathBuf {
         self.dir.join(format!("{name}{suffix}"))
     }
-}
-
-fn read_document<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    let bytes = fs::read(path).ok()?;
-    serde_json::from_slice::<OwnedEnvelope<T>>(&bytes)
-        .ok()
-        .map(|envelope| envelope.data)
 }
 
 /// Lê um documento e devolve a versão junto com o conteúdo.

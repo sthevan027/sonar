@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use tauri_plugin_global_shortcut::Shortcut;
 
-use crate::actions::Action;
+use crate::actions::{Action, Direction};
 use crate::state::Settings;
 use crate::store::CURRENT_VERSION;
 
@@ -42,6 +42,12 @@ pub fn default_bindings() -> Vec<Binding> {
         Binding {
             accelerator: "Ctrl+Alt+Down".to_string(),
             action: Action::StepOutputVolume { delta: -0.05 },
+        },
+        Binding {
+            accelerator: "Ctrl+Alt+P".to_string(),
+            action: Action::CycleProfile {
+                direction: Direction::Next,
+            },
         },
     ]
 }
@@ -187,7 +193,7 @@ mod tests {
     fn default_bindings_are_the_expected_ones() {
         let bindings = default_bindings();
 
-        assert_eq!(bindings.len(), 4);
+        assert_eq!(bindings.len(), 5);
         assert_eq!(bindings[0].accelerator, "Super+Alt+V");
         assert_eq!(bindings[0].action, Action::TogglePanel);
         assert_eq!(bindings[1].accelerator, "Ctrl+Alt+M");
@@ -196,6 +202,22 @@ mod tests {
         assert_eq!(bindings[2].action, Action::StepOutputVolume { delta: 0.05 });
         assert_eq!(bindings[3].accelerator, "Ctrl+Alt+Down");
         assert_eq!(bindings[3].action, Action::StepOutputVolume { delta: -0.05 });
+        assert_eq!(bindings[4].accelerator, "Ctrl+Alt+P");
+    }
+
+    #[test]
+    fn default_bindings_include_cycle_profile_on_ctrl_alt_p() {
+        let padrao = default_bindings()
+            .into_iter()
+            .find(|b| b.accelerator == "Ctrl+Alt+P")
+            .expect("Ctrl+Alt+P está nos padrões");
+
+        assert_eq!(
+            padrao.action,
+            Action::CycleProfile {
+                direction: crate::actions::Direction::Next
+            }
+        );
     }
 
     #[test]

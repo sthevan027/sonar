@@ -19,7 +19,6 @@ pub struct Settings {
     pub autostart: bool,
     /// A tabela de atalhos globais. Campo ausente no arquivo = lista vazia: quem decide
     /// o que preencher é a migração, não o desserializador.
-    #[serde(default)]
     pub bindings: Vec<Binding>,
 }
 
