@@ -43,7 +43,6 @@ impl Default for Level {
 }
 
 /// Como o mudo da saída padrão deve ser aplicado.
-#[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MuteMode {
     /// Deixa a saída no estado pedido.
@@ -57,7 +56,6 @@ pub enum MuteMode {
 const VOLUME_EPSILON: f32 = 0.0001;
 
 /// Como o volume da saída padrão deve ser aplicado.
-#[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VolumeMode {
     /// Soma um valor ao volume atual da saída.
@@ -364,7 +362,6 @@ impl Engine {
     /// Liga, desliga ou inverte o mudo da saída padrão. Segura `apply` durante todo o
     /// método: duas ações de mudo não podem se cruzar. O estado do mudo é lido na hora (o
     /// valor guardado pode ser velho) e a escrita só acontece quando o valor muda.
-    #[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
     pub fn act_output_mute(&self, mode: MuteMode) -> ActionResult {
         let _apply = guard(&self.apply);
         let Some(id) = self.default_render() else {
@@ -394,7 +391,6 @@ impl Engine {
     /// Soma ou define o volume da saída padrão. Segura `apply` durante todo o método: duas
     /// ações de volume não podem se cruzar. O volume é lido na hora (o valor guardado pode
     /// ser velho) e a escrita só acontece quando o valor muda de verdade.
-    #[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
     pub fn act_output_volume(&self, mode: VolumeMode) -> ActionResult {
         let _apply = guard(&self.apply);
         // Valor não finito é recusado antes de olhar o sistema: nada é tocado.
@@ -439,7 +435,6 @@ impl Engine {
     /// As sessões são lidas na hora (`source.sessions()`), não do snapshot guardado: um app
     /// que acabou de abrir ainda não está no cache, e mudá-lo pelo pid errado é o pior erro
     /// possível aqui.
-    #[allow(dead_code)] // Tarefas seguintes (F1) consomem esta ação; até lá só os testes a usam.
     pub fn act_app_mute(&self, exe: &str, muted: bool) -> ActionResult {
         // Pedido inválido é recusado antes de qualquer leitura: nada é tocado.
         let Some(request) = parse_exe_request(exe) else {
@@ -497,6 +492,26 @@ impl Engine {
         // Fora do escopo da trava: o refresh já avisa a interface.
         self.refresh();
         ActionResult::done(true, Some(key))
+    }
+
+    /// Ativa um perfil como ação (A2). Id que não existe vira `profile_not_found` e nada
+    /// muda no estado.
+    ///
+    /// Não segura `apply`: `activate_profile` adquire a trava por conta própria, e o
+    /// `Mutex` do std não é reentrante.
+    pub fn act_activate_profile(&self, id: &str) -> ActionResult {
+        if !self.activate_profile(id) {
+            return ActionResult::failed(ErrorCode::ProfileNotFound, "Perfil não encontrado.");
+        }
+        // O roteamento indisponível só aparece depois de ativar: `activate_profile` não
+        // falha por causa dele (as regras são gravadas do mesmo jeito). Quem olha é a ação.
+        if !self.state().routing_available {
+            return ActionResult::failed(
+                ErrorCode::Unsupported,
+                "Este Windows não permite trocar o dispositivo dos aplicativos.",
+            );
+        }
+        ActionResult::done(true, Some(id.to_string()))
     }
 
     /// Troca o padrão do Windows no sentido.
@@ -817,6 +832,7 @@ fn build_state(inner: &Inner) -> AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actions::{Action, ActionExecutor, Direction};
     use crate::audio::default_device::DefaultDevice;
     use crate::audio::endpoint::EndpointControl;
     use crate::audio::types::{AudioError, AudioSession, Device};
@@ -2691,6 +2707,233 @@ mod tests {
 
         assert_eq!(world.ctl.reads(), reads_before);
         assert_eq!(engine.state().devices[0].volume, 0.3);
+    }
+
+    // ---------- ativação de perfil por ação (A2) ----------
+
+    #[test]
+    fn activate_unknown_profile_fails_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        engine
+            .save_profile(profile(
+                "p1",
+                vec![ProfileItem {
+                    exe: "game.exe".to_string(),
+                    output: Target::Device(dev_id("fone")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(40, "game.exe", Flow::Render, "fone")]);
+        engine.refresh();
+        let before = engine.state();
+        let notes_before = world.notes();
+
+        let result = engine.act_activate_profile("nao-existe");
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::ProfileNotFound));
+        assert!(!result.changed);
+        assert_eq!(result.resolved, None);
+        assert_eq!(result.message.as_deref(), Some("Perfil não encontrado."));
+        // Estado igual ao anterior: nenhuma regra gravada, nenhum aviso.
+        assert_eq!(engine.state(), before);
+        assert_eq!(world.notes(), notes_before);
+    }
+
+    #[test]
+    fn activate_profile_action_applies_the_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        engine
+            .save_profile(profile(
+                "p1",
+                vec![ProfileItem {
+                    exe: "game.exe".to_string(),
+                    output: Target::Device(dev_id("fone")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(40, "game.exe", Flow::Render, "fone")]);
+        engine.refresh();
+
+        let result = engine.act_activate_profile("p1");
+
+        assert!(result.ok);
+        assert!(result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("p1"));
+        assert_eq!(
+            engine.state().rules,
+            vec![rule("game.exe", Flow::Render, "fone")]
+        );
+        assert_eq!(
+            world.backend.set_calls(),
+            vec![(40, Flow::Render, dev_id("fone"))]
+        );
+        assert_eq!(engine.state().last_profile.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn activate_profile_action_fails_when_routing_is_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        engine
+            .save_profile(profile(
+                "p1",
+                vec![ProfileItem {
+                    exe: "game.exe".to_string(),
+                    output: Target::Device(dev_id("fone")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(40, "game.exe", Flow::Render, "fone")]);
+        // Este Windows não deixa trocar a rota dos aplicativos.
+        world.backend.unsupported.store(true, Ordering::SeqCst);
+        engine.refresh();
+
+        let result = engine.act_activate_profile("p1");
+
+        // `activate_profile` devolve `true` mesmo sem roteamento: quem olha o
+        // `routing_available` depois de ativar é a ação (Ruling 16).
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::Unsupported));
+        assert!(!result.changed);
+        assert_eq!(result.resolved, None);
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+    }
+
+    // ---------- executor de ações ----------
+
+    #[test]
+    fn executor_maps_each_implemented_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![Device {
+            is_default: true,
+            ..device("fone", Flow::Render, true, "Fone")
+        }]);
+        world.source.set_sessions(vec![
+            session(30, "discord.exe", Flow::Render, "fone"),
+            session(40, "game.exe", Flow::Render, "fone"),
+        ]);
+        world.ctl.set_volume_of("fone", 0.5);
+        engine
+            .save_profile(profile(
+                "p1",
+                vec![ProfileItem {
+                    exe: "game.exe".to_string(),
+                    output: Target::Device(dev_id("fone")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+        engine.refresh();
+
+        let mute = engine.execute(Action::SetOutputMute { muted: true });
+        assert!(mute.ok);
+        assert!(mute.changed);
+        assert_eq!(mute.resolved.as_deref(), Some("fone"));
+
+        let toggle = engine.execute(Action::ToggleOutputMute);
+        assert!(toggle.ok);
+        assert!(toggle.changed);
+
+        let step = engine.execute(Action::StepOutputVolume { delta: 0.1 });
+        assert!(step.ok);
+        assert!(step.changed);
+
+        let set = engine.execute(Action::SetOutputVolume { value: 0.25 });
+        assert!(set.ok);
+        assert!(set.changed);
+
+        let app = engine.execute(Action::SetAppMute {
+            exe: "discord.exe".to_string(),
+            muted: true,
+        });
+        assert!(app.ok);
+        assert!(app.changed);
+        assert_eq!(app.resolved.as_deref(), Some("discord.exe"));
+
+        let activate = engine.execute(Action::ActivateProfile {
+            profile_id: "p1".to_string(),
+        });
+        assert!(activate.ok);
+        assert!(activate.changed);
+        assert_eq!(activate.resolved.as_deref(), Some("p1"));
+
+        // Cada ação foi para o `act_*` correspondente: o executor não reimplementa nada.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![
+                CtlCall::SetMuted("fone".to_string(), true),
+                CtlCall::SetMuted("fone".to_string(), false),
+                CtlCall::SetVolume("fone".to_string(), 0.6),
+                CtlCall::SetVolume("fone".to_string(), 0.25),
+                CtlCall::SetSessionMuted(30, Flow::Render, true),
+            ]
+        );
+        assert_eq!(
+            world.backend.set_calls(),
+            vec![(40, Flow::Render, dev_id("fone"))]
+        );
+    }
+
+    #[test]
+    fn executor_refuses_actions_not_implemented_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+
+        for action in [
+            Action::TogglePanel,
+            Action::CycleProfile {
+                direction: Direction::Next,
+            },
+            Action::MoveApp {
+                exe: "chrome.exe".to_string(),
+                device: None,
+            },
+            Action::CycleDefaultOutput {
+                direction: Direction::Prev,
+            },
+        ] {
+            let result = engine.execute(action);
+            assert!(!result.ok);
+            assert_eq!(result.error_code, Some(ErrorCode::Unsupported));
+            assert!(!result.changed);
+            assert_eq!(result.resolved, None);
+            assert_eq!(
+                result.message.as_deref(),
+                Some("Ação ainda não disponível.")
+            );
+        }
+
+        // Nenhuma ação recusada chegou ao Windows.
+        assert!(world.ctl.calls().is_empty());
+        assert!(world.backend.set_calls().is_empty());
     }
 
     // ---------- mudo de app (A8) ----------

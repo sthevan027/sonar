@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::audio::types::AudioError;
+use crate::engine::{Engine, MuteMode, VolumeMode};
 
 /// Sentido de uma troca circular (próximo ou anterior).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,7 +99,7 @@ pub fn audio_failure(err: &AudioError) -> ActionResult {
     match err {
         AudioError::Gone => ActionResult::failed(
             ErrorCode::DeviceGone,
-            "O dispositivo ou o app não está mais disponível.",
+            "O dispositivo não está mais disponível.",
         ),
         AudioError::Unsupported(_) => ActionResult::failed(
             ErrorCode::Unsupported,
@@ -113,6 +114,32 @@ pub fn audio_failure(err: &AudioError) -> ActionResult {
 /// Executa ações. Implementado pelo roteador que fala com o sistema de áudio.
 pub trait ActionExecutor: Send + Sync {
     fn execute(&self, action: Action) -> ActionResult;
+}
+
+/// Executa as ações no `Engine`: o roteador que fala com o Windows.
+///
+/// O executor só despacha: cada `act_*` segura `apply` por conta própria. Aqui a trava
+/// nunca é segurada — `Mutex` do std não é reentrante, e segurá-la nos dois níveis seria
+/// um deadlock garantido.
+impl ActionExecutor for Engine {
+    fn execute(&self, action: Action) -> ActionResult {
+        match action {
+            Action::ActivateProfile { profile_id } => self.act_activate_profile(&profile_id),
+            Action::SetOutputMute { muted } => self.act_output_mute(MuteMode::Set(muted)),
+            Action::ToggleOutputMute => self.act_output_mute(MuteMode::Toggle),
+            Action::StepOutputVolume { delta } => self.act_output_volume(VolumeMode::Step(delta)),
+            Action::SetOutputVolume { value } => self.act_output_volume(VolumeMode::Set(value)),
+            Action::SetAppMute { exe, muted } => self.act_app_mute(&exe, muted),
+            // Ações que ainda não existem: painel (Task 15), próximo perfil (Task 18),
+            // mover app (Task 19) e trocar a saída padrão (Task 20).
+            Action::TogglePanel
+            | Action::CycleProfile { .. }
+            | Action::MoveApp { .. }
+            | Action::CycleDefaultOutput { .. } => {
+                ActionResult::failed(ErrorCode::Unsupported, "Ação ainda não disponível.")
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +223,32 @@ mod tests {
         assert_eq!(
             json,
             r#"{"ok":true,"changed":false,"resolved":null,"error_code":null,"message":null}"#
+        );
+    }
+
+    #[test]
+    fn failed_action_result_json_shape_is_pinned() {
+        // A forma `failed` é a que a interface vai ler no IPC e no evento `action-result`:
+        // as mesmas cinco chaves, na mesma ordem, com o código e a frase prontos.
+        let json = serde_json::to_string(&ActionResult::failed(
+            ErrorCode::OsError,
+            "O Windows recusou a operação.",
+        ))
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"ok":false,"changed":false,"resolved":null,"error_code":"os_error","message":"O Windows recusou a operação."}"#
+        );
+    }
+
+    #[test]
+    fn gone_failure_message_matches_the_spec() {
+        // SPEC §3 (A4/A6/A7): o dispositivo que sumiu tem frase própria.
+        let result = audio_failure(&AudioError::Gone);
+        assert_eq!(result.error_code, Some(ErrorCode::DeviceGone));
+        assert_eq!(
+            result.message.as_deref(),
+            Some("O dispositivo não está mais disponível.")
         );
     }
 
