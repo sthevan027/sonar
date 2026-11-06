@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri_plugin_global_shortcut::Shortcut;
 
 use crate::actions::{Action, Direction};
+use crate::hotkeys::espelho_do_painel;
 use crate::state::Settings;
 use crate::store::CURRENT_VERSION;
 
@@ -126,8 +127,9 @@ pub fn validate_bindings(list: &[Binding]) -> Result<(), (usize, BindingError)> 
 /// O que a migração faz, para `version < 2`:
 /// - o atalho legado (`settings.shortcut`) vira um binding que alterna o painel;
 /// - os padrões do app são semeados junto, para o autor não precisar recriá-los;
-/// - o atalho legado **não** entra duas vezes: se ele já é um dos padrões, só o
-///   padrão fica.
+/// - o atalho legado **vence** qualquer padrão que use a mesma tecla, e o `toggle_panel`
+///   padrão não é semeado (o painel já tem o atalho do usuário);
+/// - `settings.shortcut` passa a ser o espelho do painel da lista nova.
 ///
 /// Duas garantias: uma lista de bindings já existente e não vazia **nunca** é
 /// sobrescrita (Ruling 14), e um atalho legado vazio ou inválido não gera binding
@@ -144,27 +146,34 @@ pub fn migrate_settings(version: u32, mut settings: Settings) -> (Settings, bool
         return (settings, false);
     }
 
-    let padroes = default_bindings();
-    let legado = settings.shortcut.trim();
+    // O atalho legado válido **vence**: ele é o painel do usuário. O padrão com a mesma
+    // tecla (de qualquer ação) e o `toggle_panel` padrão saem da semeadura — senão a tecla
+    // do usuário mudaria de dono em silêncio, ou o painel ganharia dois atalhos.
+    let legado = settings.shortcut.trim().to_string();
+    let combinacao = if legado.is_empty() {
+        None
+    } else {
+        legado.parse::<Shortcut>().ok()
+    };
     let mut bindings: Vec<Binding> = Vec::new();
-    if !legado.is_empty() {
-        if let Ok(combinacao) = legado.parse::<Shortcut>() {
-            let ja_existe = padroes.iter().any(|padrao| {
-                padrao
+    let mut padroes = default_bindings();
+    if let Some(combinacao) = combinacao {
+        padroes.retain(|padrao| {
+            padrao.action != Action::TogglePanel
+                && padrao
                     .accelerator
                     .parse::<Shortcut>()
-                    .map(|c| c == combinacao)
-                    .unwrap_or(false)
-            });
-            if !ja_existe {
-                bindings.push(Binding {
-                    accelerator: legado.to_string(),
-                    action: Action::TogglePanel,
-                });
-            }
-        }
+                    .map(|c| c != combinacao)
+                    .unwrap_or(true)
+        });
+        bindings.push(Binding {
+            accelerator: legado,
+            action: Action::TogglePanel,
+        });
     }
     bindings.extend(padroes);
+    // O campo antigo espelha o painel que de fato vale (nunca fica com lixo).
+    settings.shortcut = espelho_do_painel(&bindings);
     settings.bindings = bindings;
     (settings, true)
 }
@@ -355,6 +364,14 @@ mod tests {
         }
     }
 
+    /// Quantos bindings `toggle_panel` a lista tem.
+    fn paineis(lista: &[Binding]) -> Vec<&Binding> {
+        lista
+            .iter()
+            .filter(|b| b.action == Action::TogglePanel)
+            .collect()
+    }
+
     #[test]
     fn migration_seeds_the_legacy_shortcut_and_the_defaults() {
         let (migrada, migrou) = migrate_settings(1, settings_com("Super+Alt+P", Vec::new()));
@@ -367,31 +384,77 @@ mod tests {
                 action: Action::TogglePanel,
             }
         );
-        for padrao in default_bindings() {
+        // Os padrões entram, menos o `toggle_panel` deles: o legado do usuário é o painel.
+        for padrao in default_bindings()
+            .into_iter()
+            .filter(|b| b.action != Action::TogglePanel)
+        {
             assert!(
                 migrada.bindings.contains(&padrao),
                 "padrão ausente: {padrao:?}"
             );
         }
-        // O atalho legado continua no lugar: o campo antigo não é apagado.
+        assert_eq!(paineis(&migrada.bindings).len(), 1, "um painel só");
+        // O campo antigo continua no lugar e espelha o painel.
         assert_eq!(migrada.shortcut, "Super+Alt+P");
     }
 
     #[test]
+    fn migration_lets_the_legacy_shortcut_win_over_a_colliding_default() {
+        // I1: o legado coincide com o padrão de OUTRA ação (silenciar a saída). O usuário
+        // venceu: o atalho dele abre o painel e o padrão colidente é que sai.
+        for legado in ["Ctrl+Alt+M", "Ctrl+Alt+P", "ctrl+alt+m", "Alt+Ctrl+M"] {
+            let (migrada, migrou) = migrate_settings(1, settings_com(legado, Vec::new()));
+
+            assert!(migrou, "legado: {legado}");
+            assert_eq!(
+                migrada.bindings[0],
+                Binding {
+                    accelerator: legado.to_string(),
+                    action: Action::TogglePanel,
+                },
+                "legado: {legado}"
+            );
+            assert_eq!(paineis(&migrada.bindings).len(), 1, "legado: {legado}");
+            // Nenhum acelerador repetido: a lista passa na validação do `save_bindings`.
+            assert_eq!(validate_bindings(&migrada.bindings), Ok(()), "legado: {legado}");
+            // Invariante: o campo antigo é o espelho do painel.
+            assert_eq!(migrada.shortcut, legado, "legado: {legado}");
+        }
+        // Os padrões que não colidem continuam lá.
+        let (migrada, _) = migrate_settings(1, settings_com("Ctrl+Alt+M", Vec::new()));
+        assert!(!migrada
+            .bindings
+            .iter()
+            .any(|b| b.action == Action::ToggleOutputMute));
+        assert!(migrada
+            .bindings
+            .iter()
+            .any(|b| b.accelerator == "Ctrl+Alt+Up"));
+    }
+
+    #[test]
     fn migration_does_not_duplicate_the_legacy_shortcut() {
-        // O atalho legado é o mesmo de um padrão: ele não entra duas vezes.
-        let (migrada, migrou) = migrate_settings(1, settings_com("Ctrl+Alt+M", Vec::new()));
+        // O legado é exatamente o painel padrão: a lista sai igual aos padrões.
+        let (migrada, migrou) = migrate_settings(1, settings_com("Super+Alt+V", Vec::new()));
 
         assert!(migrou);
         assert_eq!(migrada.bindings, default_bindings());
-        assert_eq!(
-            migrada
-                .bindings
-                .iter()
-                .filter(|b| b.accelerator == "Ctrl+Alt+M")
-                .count(),
-            1
-        );
+        assert_eq!(paineis(&migrada.bindings).len(), 1);
+        assert_eq!(migrada.shortcut, "Super+Alt+V");
+    }
+
+    #[test]
+    fn migration_keeps_a_single_panel_binding_for_a_custom_legacy_shortcut() {
+        // Agravante do I1: legado personalizado sem colisão não pode semear também o
+        // `Super+Alt+V` do painel (o usuário pode ter largado essa tecla de propósito).
+        let (migrada, _) = migrate_settings(1, settings_com("Super+Alt+P", Vec::new()));
+
+        assert_eq!(paineis(&migrada.bindings).len(), 1);
+        assert!(!migrada
+            .bindings
+            .iter()
+            .any(|b| b.accelerator == "Super+Alt+V"));
     }
 
     #[test]
@@ -404,6 +467,8 @@ mod tests {
                 default_bindings(),
                 "atalho: {atalho:?}"
             );
+            // O campo antigo nunca fica com lixo: espelha o painel que de fato vale.
+            assert_eq!(migrada.shortcut, "Super+Alt+V", "atalho: {atalho:?}");
         }
     }
 

@@ -18,6 +18,7 @@ use crate::audio::default_device::DefaultDevice;
 use crate::audio::endpoint::{clamp_volume, EndpointControl};
 use crate::audio::types::{AudioError, AudioSession, AudioSource, Device, DeviceId, Flow, RouteBackend};
 use crate::bindings::migrate_settings;
+use crate::hotkeys::espelho_do_painel;
 use crate::profiles::{self, Change, NameError, Profile, Target};
 use crate::rules::{reconcile, reconcile_rule, Outcome, Rule, RuleSet};
 use crate::state::{AppState, DeviceMeta, DeviceView, Settings};
@@ -142,7 +143,13 @@ impl Engine {
         // Formato antigo: o atalho legado vira um binding e os padrões são semeados.
         // A gravação só acontece quando a migração muda alguma coisa — assim o
         // arquivo bom não é reescrito a cada abertura.
-        let (settings, migrou) = migrate_settings(version, settings);
+        let (mut settings, migrou) = migrate_settings(version, settings);
+        // Guarda para arquivos já gravados: `shortcut` é sempre o espelho do painel. Se
+        // divergir, a tela de Configurações reenviaria o valor velho e `save_settings`
+        // recusaria a gravação (atalho duplicado).
+        if !settings.bindings.is_empty() {
+            settings.shortcut = espelho_do_painel(&settings.bindings);
+        }
         let save_error = if migrou {
             write_document(&store, "settings", &settings)
         } else {
@@ -4330,8 +4337,11 @@ mod tests {
             "o atalho legado não virou binding: {:?}",
             settings.bindings
         );
-        // E os padrões foram semeados, para o autor não precisar recriá-los.
-        for padrao in crate::bindings::default_bindings() {
+        // E os padrões foram semeados (menos o painel padrão: o legado do usuário é o painel).
+        for padrao in crate::bindings::default_bindings()
+            .into_iter()
+            .filter(|b| b.action != Action::TogglePanel)
+        {
             assert!(
                 settings.bindings.contains(&padrao),
                 "padrão ausente: {padrao:?}"
@@ -4343,6 +4353,57 @@ mod tests {
         // O arquivo da v1 ficou no `.bak`.
         let bak = std::fs::read_to_string(dir.path().join("settings.json.bak")).unwrap();
         assert_eq!(bak, v1);
+    }
+
+    #[test]
+    fn v1_legacy_shortcut_that_collides_with_a_default_keeps_settings_consistent() {
+        // I1 de ponta a ponta: o legado coincide com o padrão de "silenciar a saída".
+        let dir = tempfile::tempdir().unwrap();
+        escrever_settings_v1(dir.path(), "Ctrl+Alt+M", false);
+        let world = World::new();
+
+        let engine = world.engine_at(dir.path());
+
+        let settings = engine.settings();
+        assert_eq!(
+            settings.bindings[0],
+            Binding {
+                accelerator: "Ctrl+Alt+M".to_string(),
+                action: Action::TogglePanel,
+            }
+        );
+        assert_eq!(
+            settings.shortcut,
+            crate::hotkeys::espelho_do_painel(&settings.bindings)
+        );
+        assert_eq!(crate::bindings::validate_bindings(&settings.bindings), Ok(()));
+        // O que foi gravado em disco tem o mesmo espelho.
+        let gravado: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(gravado["data"]["shortcut"], "Ctrl+Alt+M");
+    }
+
+    #[test]
+    fn engine_realigns_a_saved_file_whose_shortcut_diverges_from_the_panel_binding() {
+        // Guarda para arquivos v2 já gravados pelo bug do I1: `shortcut` não bate com o
+        // binding do painel. Sem o alinhamento, a tela de Configurações reenviaria o valor
+        // velho e `save_settings` recusaria com "Esse atalho já está em uso.".
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            r#"{"version":2,"data":{"shortcut":"Ctrl+Alt+M","autostart":false,"bindings":[
+                {"accelerator":"Super+Alt+V","action":{"type":"toggle_panel"}},
+                {"accelerator":"Ctrl+Alt+M","action":{"type":"toggle_output_mute"}}]}}"#,
+        )
+        .unwrap();
+        let world = World::new();
+
+        let engine = world.engine_at(dir.path());
+
+        assert_eq!(engine.settings().shortcut, "Super+Alt+V");
+        assert_eq!(engine.settings().bindings.len(), 2);
     }
 
     #[test]
