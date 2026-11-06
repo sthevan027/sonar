@@ -124,7 +124,7 @@ Modelo: `Settings.bindings: [{ accelerator, action }]`. `shortcut` continua send
 | Falha na inicialização | Binding fica "indisponível" com mensagem; os outros seguem (RF-17) |
 | Teclas reservadas pelo sistema | Hipótese de falha de registro (ex.: Win+L). **PENDENTE:** execução do S4 no Win11 build 26300. **Proposta (Task 9):** a sonda (registra e solta cada tecla, uma por vez) fica pronta antes do registro dos padrões, e os padrões seguem **provisionais** até o S4 |
 | Interface de Configurações | Mockup E tem uma linha única "Atalho global". A lista de bindings, o estado "indisponível" e a edição de cada um têm desenho: rascunho local de 62 KB (`bindings-screen-draft.html`, fora do repo), com a decisão **D1** — a linha "Atalho global" **convive** com a lista nova e **é** o binding `toggle_panel`, o primeiro da lista. **PENDENTE:** publicar no Doop e obter a aprovação do autor antes da F2 (os mockups são vinculantes, design §3) |
-| Permissão Tauri | Se o comando IPC novo `dispatch_action` precisa de permissão explícita em Tauri v2. **PENDENTE:** confirmar na Task 8 e registrar o achado em `sonar-system-design.md` §6 (design §6) |
+| Permissão Tauri | **Resolvido (Task 8):** comando próprio do `invoke_handler` não precisa de permissão explícita; o achado e a justificativa de segurança (webview única `panel`, comando no processo do app) estão em `sonar-system-design.md` §6 |
 
 ---
 
@@ -134,10 +134,10 @@ Ordem: F0, F1, F2, F3. Cada fase tem aceite automático e manual no Windows 11 b
 
 | Fase | Escopo | Aceite automático | Aceite manual | Status |
 |---|---|---|---|---|
-| **F0** | `actions.rs`: enum `Action` e resolvedor de alvos. Comportamento igual | `cargo test` com 93 passando e 4 ignorados, `bun run test` com 122 passando (linha base em `VERIFICACAO.md`). Testes novos de parsing da `Action` | Trocar saída de app, mutar, volume e perfil pela UI: nada muda | Pode começar após B1 e B2 |
-| **F1** | Dispatcher (fila + worker). Bandeja e atalho migrados. A2, A4, A6, A7, A8 | Idempotência de A4. Coalescência de A6. Fila não bloqueia. Fake com `Gone` não derruba o worker | Atalho muta e desmuta. Volume sobe e desce em passo. Atalho ativa perfil. Desconectar headset não derruba o app. Repetir com rede desligada e com app de destino fechado | **PENDENTE S4** para os padrões. Até lá, atalho de teste |
-| **F2** | Bindings, validação, registro por binding, migração, A9 | Migração com `.bak`. Duplicata recusada. Troca com falha mantém o anterior | Trocar atalho com painel aberto e fechado. Reiniciar e confirmar que o atalho persiste | **PENDENTE** S4 e desenho da tela de bindings (§6) |
-| **F3** | Ciclo de perfil e próxima saída (A3, A10) | Ciclo volta ao primeiro. Perfil apagado não quebra o ciclo. Uma saída só não faz nada | Ciclar com 3 perfis. Apagar o perfil atual e ciclar de novo. Ciclar saídas com uma oculta | **PENDENTE** Q2 (D4) e S4 |
+| **F0** | `actions.rs`: enum `Action` e resolvedor de alvos. Comportamento igual | `cargo test` com 93 passando e 4 ignorados, `bun run test` com 122 passando (linha base em `VERIFICACAO.md`). Testes novos de parsing da `Action` | Trocar saída de app, mutar, volume e perfil pela UI: nada muda | Concluída: testes automatizados verdes (`cargo test`, `bun run test`). Passo manual: **PENDENTE DO AUTOR** |
+| **F1** | Dispatcher (fila + worker). Bandeja e atalho migrados. A2, A4, A6, A7, A8 | Idempotência de A4. Coalescência de A6. Fila não bloqueia. Fake com `Gone` não derruba o worker | Atalho muta e desmuta. Volume sobe e desce em passo. Atalho ativa perfil. Desconectar headset não derruba o app. Repetir com rede desligada e com app de destino fechado | Código e testes automatizados concluídos. Passos manuais no Win11: **PENDENTE DO AUTOR**. Padrões provisórios até o S4 (**PENDENTE DO AUTOR**) |
+| **F2** | Bindings, validação, registro por binding, migração, A9 | Migração com `.bak`. Duplicata recusada. Troca com falha mantém o anterior | Trocar atalho com painel aberto e fechado. Reiniciar e confirmar que o atalho persiste | Código e testes automatizados concluídos (tela de bindings incluída). Passos manuais no Win11 e aprovação do desenho da tela: **PENDENTE DO AUTOR**. S4: **PENDENTE DO AUTOR** |
+| **F3** | Ciclo de perfil e próxima saída (A3, A10) | Ciclo volta ao primeiro. Perfil apagado não quebra o ciclo. Uma saída só não faz nada | Ciclar com 3 perfis. Apagar o perfil atual e ciclar de novo. Ciclar saídas com uma oculta | Código e testes automatizados concluídos (`Ctrl+Alt+P` semeado nos padrões). Passos manuais no Win11: **PENDENTE DO AUTOR**. S4: **PENDENTE DO AUTOR** |
 
 Fora desta fila: F4 (microfone, depende de S1) e F5 (EQ, depende de decisões e spikes S3 e S5).
 
@@ -145,13 +145,13 @@ Fora desta fila: F4 (microfone, depende de S1) e F5 (EQ, depende de decisões e 
 
 ## 8. Critérios de aceite da versão
 
-- [ ] As ações A2, A3, A4, A6, A7, A8, A9 e A10 rodam por atalho e por IPC, com o mesmo resultado.
-- [ ] `cargo test` e `bun run test` sem regressão: pelo menos 93 e 122 testes passando, como na linha base.
-- [ ] `bun run build` passa, sem avisos de compilador.
-- [ ] Checklist da §9.3 completo no Win11 build 26300. Falhas anotadas com passo, resultado e versão do Windows.
-- [ ] Migração de `shortcut` testada com um `settings.json` real da v1 (cópia).
-- [ ] Resultado do spike S4 registrado no design.
-- [ ] Nada da §1 "Não entra" foi implementado.
+- [x] As ações A2, A3, A4, A6, A7, A8, A9 e A10 rodam por atalho e por IPC, com o mesmo resultado. Coberto por teste automatizado por ação (`parity_a2_activate_profile` a `parity_a10_cycle_default_output`, em `engine.rs`): `Engine::execute` e dispatcher + `AppExecutor` dão o mesmo resultado e o mesmo estado. O disparo real por tecla no Windows é **PENDENTE DO AUTOR** (§9.3).
+- [x] `cargo test` e `bun run test` sem regressão: 249 e 166 testes passando (a linha base de 93 e 122 foi superada).
+- [x] `bun run build` passa, sem avisos de compilador.
+- [ ] Checklist da §9.3 completo no Win11 build 26300. Falhas anotadas com passo, resultado e versão do Windows. **PENDENTE DO AUTOR**.
+- [ ] Migração de `shortcut` testada com um `settings.json` real da v1 (cópia). **PENDENTE DO AUTOR** (os testes automatizados usam um arquivo v1 em diretório temporário).
+- [ ] Resultado do spike S4 registrado no design. **PENDENTE DO AUTOR**.
+- [x] Nada da §1 "Não entra" foi implementado.
 
 ---
 
