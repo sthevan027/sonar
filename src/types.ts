@@ -69,14 +69,10 @@ export interface RunningApp {
 export interface Settings {
   shortcut: string;
   autostart: boolean;
-}
-
-/**
- * `Settings` do Rust passa a trazer `bindings` (Task 12/14), mas o espelho do `Settings`
- * aqui é das Tasks 12/14 — este arquivo não mexe nele. Esta interface só acrescenta o
- * campo, para a tela de atalhos globais conseguir ler a lista de bindings.
- */
-export interface SettingsWithBindings extends Settings {
+  /**
+   * Tabela de atalhos globais (`Settings.bindings` do Rust). Opcional: ausente = "o
+   * frontend não mexe", e o Rust mantém a lista que já tem.
+   */
   bindings?: Binding[];
 }
 

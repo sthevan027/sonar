@@ -8,10 +8,10 @@ import type {
   Binding,
   BindingStatusEntry,
   Settings as AppSettings,
-  SettingsWithBindings,
 } from "../types";
 import { Bindings } from "./Bindings";
 import { Settings } from "./Settings";
+import { ACTION_CHOICES } from "./bindingsModel";
 import { shortcutFromKeys, shortcutKeys } from "./settingsModel";
 
 const fx = vi.hoisted(() => ({ state: null as unknown as AppState }));
@@ -77,7 +77,7 @@ function setupBindings(bindings: Binding[], statuses: BindingStatusEntry[] = [])
     sessions: [],
     rules: [],
     profiles: [{ id: "p1", icon: "layers", name: "Jogos", items: [] }],
-    settings: { shortcut: "Super+Alt+V", autostart: false, bindings } as SettingsWithBindings,
+    settings: { shortcut: "Super+Alt+V", autostart: false, bindings },
     routing_available: true,
     last_profile: null,
     save_error: null,
@@ -168,12 +168,23 @@ describe("Settings", () => {
     expect(screen.getByRole("button", { name: "Atalho global: Ctrl K. Toque para trocar." })).toBeTruthy();
   });
 
-  it("restore_default_shortcut_link_saves_super_alt_v", async () => {
+  it("restore_default_shortcut_link_saves_the_default_from_the_backend", async () => {
+    // O atalho de fábrica vem do Rust (`get_default_bindings`): a tela não guarda cópia.
+    vi.mocked(api.getDefaultBindings).mockResolvedValue([
+      { accelerator: "Ctrl+Alt+B", action: { type: "toggle_panel" } },
+    ]);
     setup(settings({ shortcut: "Ctrl+K" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Restaurar atalho padrão (Win Alt V)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Restaurar atalho padrão (Ctrl Alt B)" }));
     await waitFor(() =>
-      expect(api.saveSettings).toHaveBeenCalledWith({ shortcut: "Super+Alt+V", autostart: false }),
+      expect(api.saveSettings).toHaveBeenCalledWith({ shortcut: "Ctrl+Alt+B", autostart: false }),
     );
+  });
+
+  it("restore_default_shortcut_link_is_hidden_until_the_defaults_arrive", async () => {
+    vi.mocked(api.getDefaultBindings).mockReturnValue(new Promise(() => {}));
+    setup(settings({ shortcut: "Ctrl+K" }));
+    await screen.findByRole("switch", { name: "Iniciar com o Windows" });
+    expect(screen.queryByRole("button", { name: /Restaurar atalho padrão/ })).toBeNull();
   });
 
   it("shows_toast_when_save_settings_fails", async () => {
@@ -350,6 +361,16 @@ describe("Atalhos globais", () => {
 
     await waitFor(() => expect(api.getDefaultBindings).toHaveBeenCalled());
     await waitFor(() => expect(api.saveBindings).toHaveBeenCalledWith(defaults));
+  });
+
+  it("seletor_de_acao_lista_ciclar_perfil_e_ciclar_saida_padrao", async () => {
+    setupBindings([]);
+    fireEvent.click(await screen.findByRole("button", { name: "Adicionar atalho" }));
+    expect(await screen.findByRole("button", { name: /Próximo \/ Perfil anterior/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Próxima saída padrão/ })).toBeTruthy();
+    expect(ACTION_CHOICES.map((c) => c.kind)).toEqual(
+      expect.arrayContaining(["cycle_profile", "cycle_default_output"]),
+    );
   });
 
   it("editor_de_parametro_abre_para_mudo_de_app", async () => {

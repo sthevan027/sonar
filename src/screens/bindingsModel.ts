@@ -9,7 +9,6 @@ import type {
   Direction,
   Profile,
   Settings,
-  SettingsWithBindings,
 } from "../types";
 import { appName } from "./model";
 import { normalizeAccelerator, SHORTCUT_MODIFIER_MESSAGE } from "./settingsModel";
@@ -112,7 +111,7 @@ export const ACTION_CHOICES: ActionChoice[] = [
  */
 export function bindingsOf(settings: Settings | undefined | null): Binding[] | null {
   if (!settings) return null;
-  const list = (settings as SettingsWithBindings).bindings;
+  const list = settings.bindings;
   return Array.isArray(list) ? list : null;
 }
 

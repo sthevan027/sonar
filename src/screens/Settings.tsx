@@ -11,7 +11,6 @@ import { bindingsOf } from "./bindingsModel";
 import {
   APP_NAME,
   APP_VERSION,
-  DEFAULT_SHORTCUT,
   shortcutFromKeys,
   shortcutKeys,
 } from "./settingsModel";
@@ -54,6 +53,9 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles, onOpenBindings
   const base = useRef<AppSettings | null>(confirmed);
   const [capturing, setCapturing] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
+  // Atalho de fábrica do painel: vem do Rust (`get_default_bindings`), sem cópia aqui.
+  // `null` até chegar (ou se falhar): o link "Restaurar" simplesmente não aparece.
+  const [defaultShortcut, setDefaultShortcut] = useState<string | null>(null);
   const keysRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -81,6 +83,20 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles, onOpenBindings
     wanted.current = keep;
     setOverlay(keep);
   }, [confirmed]);
+
+  useEffect(() => {
+    let alive = true;
+    api.getDefaultBindings().then(
+      (defaults) => {
+        const panel = defaults.find((b) => b.action.type === "toggle_panel");
+        if (alive && panel) setDefaultShortcut(panel.accelerator);
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (capturing) keysRef.current?.focus();
@@ -193,14 +209,14 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles, onOpenBindings
               <span className={hint ? "bad" : undefined} aria-live="polite">
                 {helpText}
               </span>
-              {shown && shown.shortcut !== DEFAULT_SHORTCUT && (
+              {shown && defaultShortcut !== null && shown.shortcut !== defaultShortcut && (
                 <button
                   type="button"
                   className="rst"
-                  onClick={() => change("shortcut", DEFAULT_SHORTCUT)}
+                  onClick={() => change("shortcut", defaultShortcut)}
                 >
                   <Icon name="rotate-ccw" size={14} />
-                  Restaurar atalho padrão (Win Alt V)
+                  Restaurar atalho padrão ({shortcutKeys(defaultShortcut).join(" ")})
                 </button>
               )}
             </div>

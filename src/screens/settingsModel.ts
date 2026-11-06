@@ -6,9 +6,6 @@ import type { Binding, Profile } from "../types";
 export const APP_NAME = "Sonar";
 export const APP_VERSION = pkg.version;
 
-/** Atalho de fábrica (igual ao padrão do Rust em `state.rs`). */
-export const DEFAULT_SHORTCUT = "Super+Alt+V";
-
 /** Teclas de uma combinação para o desenho do atalho ("Super+Alt+V" -> Win, Alt, V). */
 export function shortcutKeys(shortcut: string): string[] {
   return shortcut
