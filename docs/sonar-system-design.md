@@ -343,10 +343,10 @@ Alternativas com tradeoffs:
 - **S2. Roteamento após reinício e fechamento do app.** Já listado como aberto (DECISOES.md:52). **PENDENTE.**
 - **S3. EQ via Equalizer APO.** Instalar em máquina de teste, aplicar configuração a um endpoint, testar bypass, troca de dispositivo, desconexão e reconexão, e observar os 10 erros do SysFX. Medir o que for medido. **PENDENTE.**
 - **S4. Conflitos de atalho.** Registrar teclas já usadas e reservadas; ver o erro devolvido pelo plugin. **PENDENTE** — a sonda (código) está pronta; a tabela de resultados depende de execução real no Win11 e está **PENDENTE DO AUTOR** (Task 9, Step 4).
-  - **Como rodar a sonda.** Só existe em build de depuração (`cargo test`/`bun run tauri dev`); em release a sonda não é compilada e a variável não é lida. Com o app fechado, abrir em modo de desenvolvimento com a variável `SONAR_PROBE_SHORTCUTS` contendo os aceleradores separados por vírgula:
+  - **Como rodar a sonda.** Só existe em build de depuração, e só dispara na abertura do app (`bun run tauri dev`). O `cargo test` **não** roda a sonda (ele só testa a lógica com um registrador falso). Em release a sonda não é compilada e a variável não é lida. O parser do plugin não aceita `Win`: use `Super` (ou `Cmd`/`Command`). Com o app fechado, abrir em modo de desenvolvimento com a variável `SONAR_PROBE_SHORTCUTS` contendo os aceleradores separados por vírgula:
 
     ```powershell
-    $env:SONAR_PROBE_SHORTCUTS="Ctrl+Alt+M,Ctrl+Alt+Up,Ctrl+Alt+Down,Ctrl+Alt+P,Ctrl+Alt+1,Win+D"
+    $env:SONAR_PROBE_SHORTCUTS="Ctrl+Alt+M,Ctrl+Alt+Up,Ctrl+Alt+Down,Ctrl+Alt+P,Ctrl+Alt+1,Super+D"
     bun run tauri dev
     ```
 
@@ -355,10 +355,16 @@ Alternativas com tradeoffs:
     ```
     sonar: sonda de atalhos (6 combinações)
     sonar: sonda OK Ctrl+Alt+M
-    sonar: sonda FALHOU Ctrl+Alt+Up: Não foi possível registrar o atalho Ctrl+Alt+Up. Outro programa pode estar usando essa combinação.
+    sonar: sonda OK Ctrl+Alt+Up
+    sonar: sonda OK Ctrl+Alt+Down
+    sonar: sonda OK Ctrl+Alt+P
+    sonar: sonda OK Ctrl+Alt+1
+    sonar: sonda FALHOU Super+D: Não foi possível registrar o atalho Super+D. Outro programa pode estar usando essa combinação.
     ```
 
-  - **Combinações a cobrir:** os padrões propostos no §11.1 (`Ctrl+Alt+M`, `Ctrl+Alt+Up`, `Ctrl+Alt+Down`, `Ctrl+Alt+P`, `Ctrl+Alt+1`) e pelo menos uma tecla reservada do sistema (`Win+D`) para ver se combo reservado falha no registro. **Nunca** `Win+L`: trava a tela, e o risco não compensa o que se aprende.
+    (O exemplo é ilustrativo: cada combinação aparece uma vez, como `OK` ou como `FALHOU`; o que sai de verdade depende da máquina.) Evite apertar as teclas da lista enquanto a sonda roda: durante a janela em que uma está registrada, ela alterna o painel.
+
+  - **Combinações a cobrir:** os padrões propostos no §11.1 (`Ctrl+Alt+M`, `Ctrl+Alt+Up`, `Ctrl+Alt+Down`, `Ctrl+Alt+P`, `Ctrl+Alt+1`) e pelo menos uma tecla reservada do sistema (`Super+D`) para ver se combo reservado falha no registro. **Nunca** `Win+L`: trava a tela, e o risco não compensa o que se aprende.
   - **Resultado (tabela) — PENDENTE DO AUTOR.** Rodar no Win11 26300 e registrar aqui quais combinações passaram e quais falharam; se um padrão falhar, trocá-lo em `default_bindings()` (a ser criado na fase F2).
 - **S5. Caminho de EQ por app com dispositivo virtual.** Rotear um app para VB-CABLE usando o `policy.rs` atual, capturar com loopback e reproduzir no físico. Medir latência e contar falhas em troca de dispositivo. Não medido até fazer. **PENDENTE.**
 - **S6. Win10.** Confirmar se process loopback e a variante Downlevel funcionam em Windows 10 (o teste de build 20348 da doc). Hoje Win10 está "não testado" (DECISOES.md:19). **PENDENTE.**

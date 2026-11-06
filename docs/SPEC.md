@@ -145,8 +145,8 @@ Fora desta fila: F4 (microfone, depende de S1) e F5 (EQ, depende de decisões e 
 
 ## 8. Critérios de aceite da versão
 
-- [x] As ações A2, A3, A4, A6, A7, A8, A9 e A10 rodam por atalho e por IPC, com o mesmo resultado. Coberto por teste automatizado por ação (`parity_a2_activate_profile` a `parity_a10_cycle_default_output`, em `engine.rs`): `Engine::execute` e dispatcher + `AppExecutor` dão o mesmo resultado e o mesmo estado. O disparo real por tecla no Windows é **PENDENTE DO AUTOR** (§9.3).
-- [x] `cargo test` e `bun run test` sem regressão: 249 e 166 testes passando (a linha base de 93 e 122 foi superada).
+- [ ] As ações A2, A3, A4, A6, A7, A8, A9 e A10 rodam por atalho e por IPC, com o mesmo resultado. **Parcial:** o automático está ok, e o disparo real por tecla é PENDENTE DO AUTOR (a A2 só fecha depois que o autor criar um binding de perfil, Ruling 25). Coberto por teste automatizado por ação (`parity_a2_activate_profile` a `parity_a10_cycle_default_output`, em `engine.rs`): `Engine::execute` e dispatcher + `AppExecutor` dão o mesmo resultado e o mesmo estado. O disparo real por tecla no Windows é **PENDENTE DO AUTOR** (§9.3).
+- [x] `cargo test` e `bun run test` sem regressão: 257 e 175 testes passando (a linha base de 93 e 122 foi superada).
 - [x] `bun run build` passa, sem avisos de compilador.
 - [ ] Checklist da §9.3 completo no Win11 build 26300. Falhas anotadas com passo, resultado e versão do Windows. **PENDENTE DO AUTOR**.
 - [ ] Migração de `shortcut` testada com um `settings.json` real da v1 (cópia). **PENDENTE DO AUTOR** (os testes automatizados usam um arquivo v1 em diretório temporário).
