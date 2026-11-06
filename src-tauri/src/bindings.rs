@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri_plugin_global_shortcut::Shortcut;
 
 use crate::actions::Action;
+use crate::state::Settings;
 
 /// Um atalho global e a ação que ele dispara.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -55,6 +56,116 @@ pub fn action_for(bindings: &[Binding], pressed: &Shortcut) -> Option<Action> {
         let combination: Shortcut = binding.accelerator.parse().ok()?;
         (combination == *pressed).then(|| binding.action.clone())
     })
+}
+
+/// Tamanho máximo do texto do acelerador.
+#[allow(dead_code)] // A Task 13/14 usa o limite ao validar o que chega pelo IPC.
+pub const MAX_ACCELERATOR_CHARS: usize = 64;
+
+/// Versão do formato das configurações que esta build entende.
+///
+/// A v1 tinha só o atalho legado; a v2 tem a tabela de bindings.
+pub const SETTINGS_VERSION: u32 = 2;
+
+/// O motivo pelo qual uma lista de atalhos foi recusada.
+#[allow(dead_code)] // A Task 13/14 transforma o motivo na resposta do IPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingError {
+    /// O acelerador está vazio.
+    Empty,
+    /// O acelerador passou do limite de caracteres.
+    TooLong,
+    /// O acelerador não é uma combinação que o plugin entende.
+    Syntax,
+    /// O mesmo atalho já está na lista.
+    Duplicate,
+}
+
+impl BindingError {
+    /// A frase para o usuário, em português.
+    #[allow(dead_code)] // A Task 13/14 mostra a frase quando o IPC recusa a lista.
+    pub fn message(&self) -> &'static str {
+        match self {
+            BindingError::Empty => "O atalho está vazio.",
+            BindingError::TooLong => "O atalho é longo demais (máximo de 64 caracteres).",
+            BindingError::Syntax => "O atalho não é uma combinação válida.",
+            BindingError::Duplicate => "Esse atalho já está em uso.",
+        }
+    }
+}
+
+/// Confere uma lista de atalhos. Devolve o **índice** do primeiro item com problema e o
+/// motivo; `Ok(())` quando a lista inteira presta.
+///
+/// A comparação de duplicatas é pela combinação **parseada**: `ctrl+alt+m` e
+/// `Ctrl+Alt+M` são a mesma tecla, e `Ctrl+Alt+M` e `Alt+Ctrl+M` também.
+#[allow(dead_code)] // A Task 13/14 valida a lista que chega pelo IPC.
+pub fn validate_bindings(list: &[Binding]) -> Result<(), (usize, BindingError)> {
+    let mut vistas: Vec<Shortcut> = Vec::new();
+    for (indice, binding) in list.iter().enumerate() {
+        let acelerador = binding.accelerator.trim();
+        if acelerador.is_empty() {
+            return Err((indice, BindingError::Empty));
+        }
+        if acelerador.chars().count() > MAX_ACCELERATOR_CHARS {
+            return Err((indice, BindingError::TooLong));
+        }
+        let combinacao = acelerador
+            .parse::<Shortcut>()
+            .map_err(|_| (indice, BindingError::Syntax))?;
+        if vistas.contains(&combinacao) {
+            return Err((indice, BindingError::Duplicate));
+        }
+        vistas.push(combinacao);
+    }
+    Ok(())
+}
+
+/// Leva as configurações de um formato antigo para o atual.
+///
+/// O `bool` diz se houve migração (isto é, se o chamador precisa gravar).
+///
+/// O que a migração faz, para `version < 2`:
+/// - o atalho legado (`settings.shortcut`) vira um binding que alterna o painel;
+/// - os padrões do app são semeados junto, para o autor não precisar recriá-los;
+/// - o atalho legado **não** entra duas vezes: se ele já é um dos padrões, só o
+///   padrão fica.
+///
+/// Duas garantias: uma lista de bindings já existente e não vazia **nunca** é
+/// sobrescrita (Ruling 14), e um atalho legado vazio ou inválido não gera binding
+/// nenhum — a migração nunca inventa um atalho que o Windows não entende.
+pub fn migrate_settings(version: u32, mut settings: Settings) -> (Settings, bool) {
+    if version >= SETTINGS_VERSION {
+        return (settings, false);
+    }
+    // Ruling 14: lista já existente e não vazia fica como está.
+    if !settings.bindings.is_empty() {
+        return (settings, false);
+    }
+
+    let padroes = default_bindings();
+    let legado = settings.shortcut.trim();
+    let mut bindings: Vec<Binding> = Vec::new();
+    if !legado.is_empty() {
+        if let Ok(combinacao) = legado.parse::<Shortcut>() {
+            let ja_existe = padroes.iter().any(|padrao| {
+                padrao
+                    .accelerator
+                    .parse::<Shortcut>()
+                    .map(|c| c == combinacao)
+                    .unwrap_or(false)
+            });
+            if !ja_existe {
+                bindings.push(Binding {
+                    accelerator: legado.to_string(),
+                    action: Action::TogglePanel,
+                });
+            }
+        }
+    }
+    bindings.extend(padroes);
+    settings.bindings = bindings;
+    (settings, true)
 }
 
 #[cfg(test)]
@@ -146,5 +257,156 @@ mod tests {
             json,
             r#"{"accelerator":"Ctrl+Alt+M","action":{"type":"toggle_output_mute"}}"#
         );
+    }
+
+    // ---------- validação ----------
+
+    fn binding(accelerator: &str) -> Binding {
+        Binding {
+            accelerator: accelerator.to_string(),
+            action: Action::TogglePanel,
+        }
+    }
+
+    #[test]
+    fn accepts_the_default_bindings() {
+        assert_eq!(validate_bindings(&default_bindings()), Ok(()));
+    }
+
+    #[test]
+    fn rejects_an_empty_accelerator() {
+        let lista = vec![binding("Ctrl+Alt+M"), binding("   ")];
+        assert_eq!(validate_bindings(&lista), Err((1, BindingError::Empty)));
+    }
+
+    #[test]
+    fn rejects_a_bad_syntax() {
+        for invalido in ["Ctrl+", "Banana"] {
+            let lista = vec![binding(invalido)];
+            assert_eq!(
+                validate_bindings(&lista),
+                Err((0, BindingError::Syntax)),
+                "acelerador: {invalido}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_an_accelerator_over_64_chars() {
+        let lista = vec![binding(&"A".repeat(65))];
+        assert_eq!(validate_bindings(&lista), Err((0, BindingError::TooLong)));
+    }
+
+    #[test]
+    fn rejects_duplicate_accelerators_ignoring_case() {
+        let lista = vec![binding("ctrl+alt+m"), binding("Ctrl+Alt+M")];
+        assert_eq!(validate_bindings(&lista), Err((1, BindingError::Duplicate)));
+    }
+
+    #[test]
+    fn rejects_duplicate_accelerators_ignoring_the_order_of_the_modifiers() {
+        let lista = vec![binding("Ctrl+Alt+M"), binding("Alt+Ctrl+M")];
+        assert_eq!(validate_bindings(&lista), Err((1, BindingError::Duplicate)));
+    }
+
+    #[test]
+    fn every_binding_error_has_a_message_in_portuguese() {
+        for erro in [
+            BindingError::Empty,
+            BindingError::TooLong,
+            BindingError::Syntax,
+            BindingError::Duplicate,
+        ] {
+            let mensagem = erro.message();
+            assert!(!mensagem.is_empty());
+            assert!(
+                mensagem.chars().any(|c| c.is_ascii_alphabetic()),
+                "mensagem sem texto: {mensagem}"
+            );
+        }
+    }
+
+    // ---------- migração ----------
+
+    fn settings_com(shortcut: &str, bindings: Vec<Binding>) -> Settings {
+        Settings {
+            shortcut: shortcut.to_string(),
+            autostart: false,
+            bindings,
+        }
+    }
+
+    #[test]
+    fn migration_seeds_the_legacy_shortcut_and_the_defaults() {
+        let (migrada, migrou) = migrate_settings(1, settings_com("Super+Alt+P", Vec::new()));
+
+        assert!(migrou);
+        assert_eq!(
+            migrada.bindings[0],
+            Binding {
+                accelerator: "Super+Alt+P".to_string(),
+                action: Action::TogglePanel,
+            }
+        );
+        for padrao in default_bindings() {
+            assert!(
+                migrada.bindings.contains(&padrao),
+                "padrão ausente: {padrao:?}"
+            );
+        }
+        // O atalho legado continua no lugar: o campo antigo não é apagado.
+        assert_eq!(migrada.shortcut, "Super+Alt+P");
+    }
+
+    #[test]
+    fn migration_does_not_duplicate_the_legacy_shortcut() {
+        // O atalho legado é o mesmo de um padrão: ele não entra duas vezes.
+        let (migrada, migrou) = migrate_settings(1, settings_com("Ctrl+Alt+M", Vec::new()));
+
+        assert!(migrou);
+        assert_eq!(migrada.bindings, default_bindings());
+        assert_eq!(
+            migrada
+                .bindings
+                .iter()
+                .filter(|b| b.accelerator == "Ctrl+Alt+M")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn migration_of_a_garbage_shortcut_creates_no_binding() {
+        for atalho in ["", "???"] {
+            let (migrada, migrou) = migrate_settings(1, settings_com(atalho, Vec::new()));
+            assert!(migrou, "atalho: {atalho:?}");
+            assert_eq!(
+                migrada.bindings,
+                default_bindings(),
+                "atalho: {atalho:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn migration_keeps_a_binding_list_that_is_already_there() {
+        // Ruling 14: uma lista já existente e não vazia nunca é sobrescrita.
+        let lista = vec![Binding {
+            accelerator: "Ctrl+Alt+K".to_string(),
+            action: Action::TogglePanel,
+        }];
+        let (migrada, migrou) = migrate_settings(1, settings_com("Super+Alt+P", lista.clone()));
+
+        assert_eq!(migrada.bindings, lista);
+        assert!(!migrou, "não há o que migrar: a lista já está lá");
+    }
+
+    #[test]
+    fn migration_of_the_current_version_changes_nothing() {
+        let antes = settings_com("Super+Alt+P", Vec::new());
+        let (migrada, migrou) = migrate_settings(2, antes.clone());
+
+        assert_eq!(migrada, antes);
+        assert!(!migrou);
     }
 }

@@ -17,6 +17,7 @@ use crate::apps::{ExeRequest, parse_exe_request};
 use crate::audio::default_device::DefaultDevice;
 use crate::audio::endpoint::{clamp_volume, EndpointControl};
 use crate::audio::types::{AudioError, AudioSession, AudioSource, Device, DeviceId, Flow, RouteBackend};
+use crate::bindings::migrate_settings;
 use crate::profiles::{self, Change, NameError, Profile, Target};
 use crate::rules::{reconcile, reconcile_rule, Outcome, Rule, RuleSet};
 use crate::state::{AppState, DeviceMeta, DeviceView, Settings};
@@ -137,7 +138,16 @@ impl Engine {
         store: Store,
         notify: Arc<dyn Fn(&AppState) + Send + Sync>,
     ) -> Engine {
-        let settings: Settings = store.load("settings");
+        let (version, settings) = store.load_versioned("settings");
+        // Formato antigo: o atalho legado vira um binding e os padrões são semeados.
+        // A gravação só acontece quando a migração muda alguma coisa — assim o
+        // arquivo bom não é reescrito a cada abertura.
+        let (settings, migrou) = migrate_settings(version, settings);
+        let save_error = if migrou {
+            write_document(&store, "settings", &settings)
+        } else {
+            None
+        };
         let meta: BTreeMap<String, DeviceMeta> = store.load("devices");
         let rules: RuleSet = store.load("rules");
         let profiles: Vec<Profile> = store.load("profiles");
@@ -150,7 +160,7 @@ impl Engine {
             meta: meta.into_iter().filter(|(_, m)| m.is_meaningful()).collect(),
             routing_available: true,
             last_profile: None,
-            save_error: None,
+            save_error,
             levels: BTreeMap::new(),
             generation: 0,
         };
@@ -942,6 +952,7 @@ mod tests {
     use crate::audio::default_device::DefaultDevice;
     use crate::audio::endpoint::EndpointControl;
     use crate::audio::types::{AudioError, AudioSession, Device};
+    use crate::bindings::Binding;
     use crate::profiles::{Profile, ProfileItem, Target};
     use crate::rules::Rule;
     use crate::state::DeviceMeta;
@@ -1827,6 +1838,13 @@ mod tests {
 
     #[test]
     fn app_state_json_shape_is_pinned() {
+        // A forma do estado que a interface lê.
+        //
+        // **Mudança de propósito (Ruling 20 / RNF-06):** `settings` ganhou o campo
+        // `bindings` — a tabela de atalhos globais (combinação → ação). O `AppState`
+        // carrega `Settings` como está, então o campo novo aparece dentro de
+        // `settings` e é essa a forma que o JSON passa a ter. Nada mais do estado
+        // mudou: as chaves de cima continuam as mesmas.
         let state = AppState {
             devices: vec![DeviceView {
                 id: dev_id("fone"),
@@ -1845,7 +1863,14 @@ mod tests {
             sessions: vec![session(10, "chrome.exe", Flow::Render, "fone")],
             rules: vec![rule("chrome.exe", Flow::Render, "fone")],
             profiles: vec![profile("p1", vec![])],
-            settings: Settings::default(),
+            settings: Settings {
+                shortcut: "Super+Alt+V".into(),
+                autostart: false,
+                bindings: vec![Binding {
+                    accelerator: "Ctrl+Alt+M".into(),
+                    action: Action::ToggleOutputMute,
+                }],
+            },
             routing_available: true,
             last_profile: Some("p1".into()),
             save_error: None,
@@ -1907,6 +1932,20 @@ mod tests {
 
         assert_eq!(json["settings"]["shortcut"], "Super+Alt+V");
         assert_eq!(json["settings"]["autostart"], false);
+        // Campo novo (Ruling 20): a tabela de atalhos dentro das configurações.
+        let bindings_json = json["settings"]["bindings"].as_array().unwrap();
+        assert_eq!(bindings_json.len(), 1);
+        assert_eq!(bindings_json[0]["accelerator"], "Ctrl+Alt+M");
+        assert_eq!(bindings_json[0]["action"]["type"], "toggle_output_mute");
+        let settings_keys = |v: &serde_json::Value| -> Vec<String> {
+            let mut keys: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(
+            settings_keys(&json["settings"]),
+            vec!["autostart", "bindings", "shortcut"]
+        );
 
         let mut with_error = state.clone();
         with_error.save_error = Some("falhou".into());
@@ -3758,5 +3797,92 @@ mod tests {
         assert!(result.ok);
         assert!(result.changed);
         assert!(releitura_pronta.load(Ordering::SeqCst));
+    }
+
+    // ---------- migração das configurações ----------
+
+    /// Grava um `settings.json` de verdade (o formato da v1) na pasta do teste.
+    fn escrever_settings_v1(dir: &Path, shortcut: &str, autostart: bool) -> String {
+        let conteudo = format!(
+            r#"{{"version":1,"data":{{"shortcut":"{shortcut}","autostart":{autostart}}}}}"#
+        );
+        std::fs::write(dir.join("settings.json"), &conteudo).unwrap();
+        conteudo
+    }
+
+    #[test]
+    fn v1_settings_file_migrates_and_keeps_bak() {
+        let dir = tempfile::tempdir().unwrap();
+        let v1 = escrever_settings_v1(dir.path(), "Super+Alt+P", true);
+        let world = World::new();
+
+        let engine = world.engine_at(dir.path());
+
+        let settings = engine.settings();
+        // O atalho legado virou um binding de alternar o painel.
+        assert!(
+            settings.bindings.contains(&Binding {
+                accelerator: "Super+Alt+P".to_string(),
+                action: Action::TogglePanel,
+            }),
+            "o atalho legado não virou binding: {:?}",
+            settings.bindings
+        );
+        // E os padrões foram semeados, para o autor não precisar recriá-los.
+        for padrao in crate::bindings::default_bindings() {
+            assert!(
+                settings.bindings.contains(&padrao),
+                "padrão ausente: {padrao:?}"
+            );
+        }
+        // O resto das configurações foi preservado.
+        assert!(settings.autostart);
+        assert_eq!(settings.shortcut, "Super+Alt+P");
+        // O arquivo da v1 ficou no `.bak`.
+        let bak = std::fs::read_to_string(dir.path().join("settings.json.bak")).unwrap();
+        assert_eq!(bak, v1);
+    }
+
+    #[test]
+    fn garbage_legacy_shortcut_creates_no_binding() {
+        for atalho in ["", "???"] {
+            let dir = tempfile::tempdir().unwrap();
+            escrever_settings_v1(dir.path(), atalho, false);
+            let world = World::new();
+
+            let engine = world.engine_at(dir.path());
+
+            assert_eq!(
+                engine.settings().bindings,
+                crate::bindings::default_bindings(),
+                "atalho: {atalho:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn current_version_file_is_not_migrated_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let v1 = escrever_settings_v1(dir.path(), "Super+Alt+P", true);
+        let world = World::new();
+
+        let primeiro = world.engine_at(dir.path());
+        let bindings = primeiro.settings().bindings;
+        let main_depois = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();
+        let bak_depois = std::fs::read_to_string(dir.path().join("settings.json.bak")).unwrap();
+
+        // Abrir de novo não pode duplicar nem regravar o arquivo.
+        let segundo = world.engine_at(dir.path());
+
+        assert_eq!(segundo.settings().bindings, bindings);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("settings.json")).unwrap(),
+            main_depois
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("settings.json.bak")).unwrap(),
+            bak_depois
+        );
+        assert_eq!(bak_depois, v1);
     }
 }
