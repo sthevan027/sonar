@@ -106,14 +106,6 @@ export const ACTION_CHOICES: ActionChoice[] = [
   },
 ];
 
-/** Atalhos padrão do app. Espelha `default_bindings()` do Rust (Task 11). */
-export const DEFAULT_BINDINGS: Binding[] = [
-  { accelerator: "Super+Alt+V", action: { type: "toggle_panel" } },
-  { accelerator: "Ctrl+Alt+M", action: { type: "toggle_output_mute" } },
-  { accelerator: "Ctrl+Alt+Up", action: { type: "step_output_volume", delta: 0.05 } },
-  { accelerator: "Ctrl+Alt+Down", action: { type: "step_output_volume", delta: -0.05 } },
-];
-
 /**
  * Lista de bindings das configurações. `null` quando o Rust ainda não manda o campo (a
  * migração da Task 12 não chegou): aí a tela não pode afirmar que não existe atalho.

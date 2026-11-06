@@ -10,7 +10,13 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => undefined) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open }));
 
-import { dispatchAction, getBindingStatus, pickExecutable, saveBindings } from "./api";
+import {
+  dispatchAction,
+  getBindingStatus,
+  getDefaultBindings,
+  pickExecutable,
+  saveBindings,
+} from "./api";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -67,6 +73,16 @@ describe("getBindingStatus", () => {
 
     await expect(getBindingStatus()).resolves.toEqual(status);
     expect(mocks.invoke).toHaveBeenCalledWith("get_binding_status");
+  });
+});
+
+describe("getDefaultBindings", () => {
+  it("chama o comando get_default_bindings sem argumentos", async () => {
+    const bindings = [{ accelerator: "Super+Alt+V", action: { type: "toggle_panel" as const } }];
+    mocks.invoke.mockResolvedValueOnce(bindings);
+
+    await expect(getDefaultBindings()).resolves.toEqual(bindings);
+    expect(mocks.invoke).toHaveBeenCalledWith("get_default_bindings");
   });
 });
 

@@ -94,6 +94,14 @@ export function getBindingStatus(): Promise<BindingStatusEntry[]> {
 }
 
 /**
+ * Atalhos padrão do app. Vem do Rust (`bindings::default_bindings()`), que é a mesma lista
+ * que a migração semeia: o TypeScript não guarda cópia, senão as duas listas divergem.
+ */
+export function getDefaultBindings(): Promise<Binding[]> {
+  return invoke<Binding[]>("get_default_bindings");
+}
+
+/**
  * Grava a lista inteira de bindings. O Rust valida a lista toda, registra e só então
  * persiste; em erro, rejeita com a frase em português e não grava nada.
  */

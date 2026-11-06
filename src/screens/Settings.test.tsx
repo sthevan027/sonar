@@ -29,6 +29,7 @@ vi.mock("../api", () => ({
   checkForUpdate: vi.fn(async () => null),
   installUpdate: vi.fn(async () => undefined),
   getBindingStatus: vi.fn(async () => []),
+  getDefaultBindings: vi.fn(async () => []),
   saveBindings: vi.fn(async () => []),
   onBindingsStatus: vi.fn(async () => () => {}),
   onActionResult: vi.fn(async () => () => {}),
@@ -333,6 +334,22 @@ describe("Atalhos globais", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Remover atalho" }));
     fireEvent.click(screen.getByRole("button", { name: "Remover" }));
     await waitFor(() => expect(api.saveBindings).toHaveBeenCalledWith([PANEL_BINDING]));
+  });
+
+  it("restaurar_padroes_busca_no_backend_e_substitui_a_lista", async () => {
+    setupBindings([PANEL_BINDING]);
+    // Os padrões vêm do Rust (Ruling 42): a tela não guarda cópia deles.
+    const defaults: Binding[] = [
+      { accelerator: "Super+Alt+V", action: { type: "toggle_panel" } },
+      { accelerator: "Ctrl+Alt+M", action: { type: "toggle_output_mute" } },
+    ];
+    vi.mocked(api.getDefaultBindings).mockResolvedValue(defaults);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restaurar padrões" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restaurar" }));
+
+    await waitFor(() => expect(api.getDefaultBindings).toHaveBeenCalled());
+    await waitFor(() => expect(api.saveBindings).toHaveBeenCalledWith(defaults));
   });
 
   it("editor_de_parametro_abre_para_mudo_de_app", async () => {

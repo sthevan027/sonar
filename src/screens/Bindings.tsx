@@ -7,7 +7,6 @@ import { useAppState } from "../store";
 import type { Binding, BindingStatus, BindingStatusEntry } from "../types";
 import { BindingEditor } from "./BindingEditor";
 import {
-  DEFAULT_BINDINGS,
   bindingDetail,
   bindingIcon,
   bindingIsBrass,
@@ -46,6 +45,9 @@ export function Bindings({ onBack }: BindingsProps) {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [confirmRestore, setConfirmRestore] = useState(false);
+  // "Restaurar padrões" busca os padrões no Rust antes de gravar: o botão fica travado
+  // enquanto a busca e a gravação acontecem (Ruling 42).
+  const [restoring, setRestoring] = useState(false);
 
   // Estado de registro dos bindings: uma entrada por binding, casada pelo acelerador
   // (a ordem muda quando um binding sai do meio da lista).
@@ -88,7 +90,7 @@ export function Bindings({ onBack }: BindingsProps) {
 
   /** Grava a lista inteira. A falha não muda a lista da tela. */
   function save(next: Binding[], opts: { onSuccess?: () => void } = {}) {
-    api.saveBindings(next).then(
+    return api.saveBindings(next).then(
       (loaded) => {
         setList(next);
         setStatuses(loaded);
@@ -152,10 +154,18 @@ export function Bindings({ onBack }: BindingsProps) {
     });
   }
 
-  /** "Restaurar padrões" substitui a lista inteira (D4). */
+  /**
+   * "Restaurar padrões" substitui a lista inteira (D4). Os padrões vêm do Rust, pelo
+   * comando `get_default_bindings` — não há cópia deles no TypeScript (Ruling 42).
+   */
   function restoreDefaults() {
     setConfirmRestore(false);
-    save(DEFAULT_BINDINGS);
+    setRestoring(true);
+    api
+      .getDefaultBindings()
+      .then((patterns) => save(patterns))
+      .catch(() => notify("Não foi possível restaurar os atalhos padrão."))
+      .finally(() => setRestoring(false));
   }
 
   if (editor) {
@@ -245,6 +255,7 @@ export function Bindings({ onBack }: BindingsProps) {
           type="button"
           className="btn"
           style={{ flex: 1 }}
+          disabled={restoring}
           onClick={() => setConfirmRestore(true)}
         >
           Restaurar padrões
