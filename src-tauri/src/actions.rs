@@ -92,6 +92,25 @@ impl ActionResult {
             message: Some(message.to_string()),
         }
     }
+
+    /// Ação que cumpriu só **parte** do pedido: o estado mudou, mas o pedido não foi
+    /// cumprido inteiro.
+    ///
+    /// `ok` e `changed` são independentes: aqui `ok` é falso (não cumpriu tudo) e `changed`
+    /// é o do resultado anterior (mudou de fato). O `resolved` é preservado — o que a
+    /// ação resolveu continua valendo.
+    ///
+    /// Consequência para quem consome: **`ok == false` não implica `changed == false`**.
+    /// O painel não pode assumir que uma falha significa "nada mudou".
+    pub fn partial(previous: ActionResult, code: ErrorCode, message: &str) -> ActionResult {
+        ActionResult {
+            ok: false,
+            changed: previous.changed,
+            resolved: previous.resolved,
+            error_code: Some(code),
+            message: Some(message.to_string()),
+        }
+    }
 }
 
 /// Converte uma falha de áudio em resultado. Nunca expõe o HRESULT em hexadecimal.
@@ -130,8 +149,8 @@ impl ActionExecutor for Engine {
             Action::StepOutputVolume { delta } => self.act_output_volume(VolumeMode::Step(delta)),
             Action::SetOutputVolume { value } => self.act_output_volume(VolumeMode::Set(value)),
             Action::SetAppMute { exe, muted } => self.act_app_mute(&exe, muted),
-            // Ações que ainda não existem: painel (Task 15), próximo perfil (Task 18),
-            // mover app (Task 19) e trocar a saída padrão (Task 20).
+            // Ações que ainda não existem: painel (AppExecutor da Task 8), mover app
+            // (Task 15), próximo perfil (Task 18) e trocar a saída padrão (Task 19).
             Action::TogglePanel
             | Action::CycleProfile { .. }
             | Action::MoveApp { .. }
@@ -239,6 +258,39 @@ mod tests {
             json,
             r#"{"ok":false,"changed":false,"resolved":null,"error_code":"os_error","message":"O Windows recusou a operação."}"#
         );
+    }
+
+    #[test]
+    fn partial_action_result_json_shape_is_pinned() {
+        // A forma parcial — "falhou, mas mudou" — é a que o painel vai ler: as mesmas
+        // cinco chaves, na mesma ordem, com `ok` falso e `changed` verdadeiro.
+        let json = serde_json::to_string(&ActionResult::partial(
+            ActionResult::done(true, Some("p1".to_string())),
+            ErrorCode::Unsupported,
+            "O perfil foi ativado, mas este Windows não permite trocar o dispositivo dos aplicativos.",
+        ))
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"ok":false,"changed":true,"resolved":"p1","error_code":"unsupported","message":"O perfil foi ativado, mas este Windows não permite trocar o dispositivo dos aplicativos."}"#
+        );
+    }
+
+    #[test]
+    fn partial_preserves_changed_and_resolved() {
+        let partial = ActionResult::partial(
+            ActionResult::done(true, Some("discord.exe".to_string())),
+            ErrorCode::DeviceGone,
+            "O mudo foi aplicado em parte.",
+        );
+
+        // `ok` falso: o pedido não foi cumprido inteiro.
+        assert!(!partial.ok);
+        // `changed` preservado: o estado mudou de fato.
+        assert!(partial.changed);
+        // `resolved` preservado: o que a ação resolveu continua valendo.
+        assert_eq!(partial.resolved.as_deref(), Some("discord.exe"));
+        assert_eq!(partial.error_code, Some(ErrorCode::DeviceGone));
     }
 
     #[test]

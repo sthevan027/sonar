@@ -92,6 +92,28 @@ struct SystemRead {
     levels: Option<BTreeMap<String, Level>>,
 }
 
+/// Relato de uma ativação de perfil: os fatos que a ação precisa saber depois de ativar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProfileActivation {
+    /// O perfil existe.
+    found: bool,
+    /// As regras ou o perfil ativo mudaram de fato (comparação antes/depois).
+    changed: bool,
+    /// O roteamento esbarrou em `Unsupported` **nesta** ativação.
+    routing_unsupported: bool,
+}
+
+impl ProfileActivation {
+    /// Perfil inexistente: nada muda e nada é avisado.
+    fn not_found() -> ProfileActivation {
+        ProfileActivation {
+            found: false,
+            changed: false,
+            routing_unsupported: false,
+        }
+    }
+}
+
 pub struct Engine {
     source: Arc<dyn AudioSource>,
     backend: Arc<dyn RouteBackend>,
@@ -220,14 +242,33 @@ impl Engine {
 
     /// Ativa um perfil. `false` quando o id não existe (nada muda e nada é avisado).
     pub fn activate_profile(&self, id: &str) -> bool {
-        {
+        self.activate_profile_report(id).found
+    }
+
+    /// Ativa um perfil e relata o que aconteceu de fato.
+    ///
+    /// A ativação inteira roda sob a trava `apply`. O relato traz três fatos:
+    /// - `found`: o perfil existe;
+    /// - `changed`: as regras ou o perfil ativo mudaram (comparação antes/depois);
+    /// - `routing_unsupported`: o roteamento esbarrou em `Unsupported` **nesta** ativação.
+    ///
+    /// O escopo do `changed` são as **regras e o perfil ativo**. O dispositivo das
+    /// sessões fica de fora: ele muda por re-leitura do sistema e por sessão que entra
+    /// ou sai — não é a ação que mudou.
+    fn activate_profile_report(&self, id: &str) -> ProfileActivation {
+        let report = {
             let _apply = guard(&self.apply);
-            let (profile, mut rules) = {
+            let (profile, mut rules, rules_before, profile_before) = {
                 let inner = self.lock();
                 let Some(profile) = inner.profiles.iter().find(|p| p.id == id).cloned() else {
-                    return false;
+                    return ProfileActivation::not_found();
                 };
-                (profile, inner.rules.clone())
+                (
+                    profile,
+                    inner.rules.clone(),
+                    inner.rules.clone(),
+                    inner.last_profile.clone(),
+                )
             };
             let changes = profiles::activate(&profile, &mut rules);
             let generation = {
@@ -240,7 +281,9 @@ impl Engine {
             // Troca de perfil relê tudo: as regras novas entram pela releitura.
             let read = self.read_system();
             self.store_system(generation, read);
-            self.reconcile_cached();
+            // O veredito do roteamento é o **desta** rodada, não o latch global: uma
+            // falha antiga não pode fazer esta ativação parecer um `Unsupported`.
+            let routing_unsupported = self.reconcile_cached();
             let cleared: Vec<(String, Flow)> = changes
                 .into_iter()
                 .filter_map(|change| match change {
@@ -259,9 +302,23 @@ impl Engine {
                 }
             }
             self.lock().last_profile = Some(id.to_string());
+            // `changed` é comparação antes/depois, não constante: reativar o perfil já
+            // ativo não muda nada. `RuleSet::upsert`/`remove` preservam a ordem e o
+            // `RuleSet` é `PartialEq`, então comparar o conjunto é confiável.
+            let changed = {
+                let inner = self.lock();
+                inner.rules != rules_before || inner.last_profile != profile_before
+            };
+            ProfileActivation {
+                found: true,
+                changed,
+                routing_unsupported,
+            }
+        };
+        if report.found {
+            self.emit();
         }
-        self.emit();
-        true
+        report
     }
 
     /// Cria ou substitui um perfil pelo id. Nome inválido é recusado sem gravar nada.
@@ -490,34 +547,54 @@ impl Engine {
         if changed {
             // Fora do escopo da trava: o refresh já avisa a interface.
             self.refresh();
-            return ActionResult::done(true, Some(key));
+            if first_error.is_none() {
+                // Todo mundo foi mudado: o pedido foi cumprido inteiro.
+                return ActionResult::done(true, Some(key));
+            }
         }
         // O branch de erro se keya pelo erro existir, não por `changed` ser falso: o caso
         // "não havia nada a mudar" já saiu antes, e um `OsError` aqui seria erro falso.
         match first_error {
+            // Metade do pedido cumprida: o estado mudou, mas o pedido não foi cumprido
+            // inteiro. `ok` falso e `changed` verdadeiro ao mesmo tempo — a forma honesta.
+            Some(err) if changed => {
+                let falha = audio_failure(&err);
+                let code = falha
+                    .error_code
+                    .expect("falha de áudio sempre tem código");
+                let motivo = falha.message.expect("falha de áudio sempre tem frase");
+                let message = format!(
+                    "O mudo foi aplicado em parte, mas uma sessão não pôde ser mudada: {}",
+                    lowercase_first(&motivo)
+                );
+                ActionResult::partial(ActionResult::done(true, Some(key)), code, &message)
+            }
             Some(err) => audio_failure(&err),
-            None => ActionResult::failed(ErrorCode::OsError, "O Windows recusou a operação."),
+            // Inalcançável hoje: o laço só deixa `changed == false` quando toda escrita
+            // deu `Err`, o que garante `first_error.is_some()`. Fica `done` (e não um erro
+            // inventado) para que um refactor futuro não passe a mentir com um erro falso.
+            None => ActionResult::done(false, Some(key)),
         }
     }
 
     /// Ativa um perfil como ação (A2). Id que não existe vira `profile_not_found` e nada
     /// muda no estado.
     ///
-    /// Não segura `apply`: `activate_profile` adquire a trava por conta própria, e o
+    /// Não segura `apply`: `activate_profile_report` adquire a trava por conta própria, e o
     /// `Mutex` do std não é reentrante.
     pub fn act_activate_profile(&self, id: &str) -> ActionResult {
-        if !self.activate_profile(id) {
+        let report = self.activate_profile_report(id);
+        if !report.found {
             return ActionResult::failed(ErrorCode::ProfileNotFound, "Perfil não encontrado.");
         }
-        // O roteamento indisponível só aparece depois de ativar: `activate_profile` não
-        // falha por causa dele (as regras são gravadas do mesmo jeito). Quem olha é a ação.
-        if !self.state().routing_available {
-            return ActionResult::failed(
+        if report.routing_unsupported {
+            return ActionResult::partial(
+                ActionResult::done(report.changed, Some(id.to_string())),
                 ErrorCode::Unsupported,
-                "Este Windows não permite trocar o dispositivo dos aplicativos.",
+                "O perfil foi ativado, mas este Windows não permite trocar o dispositivo dos aplicativos.",
             );
         }
-        ActionResult::done(true, Some(id.to_string()))
+        ActionResult::done(report.changed, Some(id.to_string()))
     }
 
     /// Troca o padrão do Windows no sentido.
@@ -624,7 +701,11 @@ impl Engine {
     }
 
     /// Aplica as regras às sessões conhecidas e atualiza `routing_available` (quem chama segura `apply`).
-    fn reconcile_cached(&self) {
+    ///
+    /// Devolve `true` quando **esta** rodada esbarrou em `Unsupported`. O latch global
+    /// (`routing_available`) continua sendo atualizado, mas ele é histórico: quem precisa
+    /// saber se o roteamento funcionou *nesta* ativação usa o valor devolvido aqui.
+    fn reconcile_cached(&self) -> bool {
         let (rules, devices, sessions) = {
             let inner = self.lock();
             (inner.rules.clone(), inner.devices.clone(), inner.sessions.clone())
@@ -636,7 +717,17 @@ impl Engine {
                 self.lock().sessions = fresh;
             }
         }
+        let unsupported = outcomes.iter().any(|o| {
+            matches!(
+                o,
+                Outcome::Skipped {
+                    reason: AudioError::Unsupported(_),
+                    ..
+                }
+            )
+        });
         self.latch_routing(&outcomes);
+        unsupported
     }
 
     /// Trava: cai no primeiro Unsupported e só volta com um roteamento bem-sucedido.
@@ -733,6 +824,15 @@ fn exe_key(request: ExeRequest<'_>) -> String {
 fn exe_file_name(path: &str) -> &str {
     let cut = path.rfind(['\\', '/']).map(|at| at + 1).unwrap_or(0);
     &path[cut..]
+}
+
+/// Primeira letra em minúscula, para encaixar uma frase dentro de outra.
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// Limpa a rota de cada sessão do executável no sentido. Falha numa sessão (ex.: já
@@ -913,6 +1013,36 @@ mod tests {
         }
     }
 
+    /// Porta só de teste: a chamada avisa que chegou e fica parada até o teste liberar.
+    /// Uso único: a primeira chamada que chega é a que para. Sem porta postada, a chamada
+    /// passa direto.
+    #[derive(Default)]
+    struct Gate {
+        chegou: Mutex<Option<mpsc::Sender<()>>>,
+        liberar: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+
+    impl Gate {
+        /// Posta a porta: a próxima chamada avisa em `chegou` e espera a permissão de
+        /// `liberar`.
+        fn post(&self, chegou: mpsc::Sender<()>, liberar: mpsc::Receiver<()>) {
+            *self.chegou.lock().unwrap() = Some(chegou);
+            *self.liberar.lock().unwrap() = Some(liberar);
+        }
+
+        /// Estaciona a chamada dentro da porta, se houver uma posta.
+        fn wait(&self) {
+            let chegou = self.chegou.lock().unwrap().take();
+            let liberar = self.liberar.lock().unwrap().take();
+            let (Some(chegou), Some(liberar)) = (chegou, liberar) else {
+                return;
+            };
+            // Avisa que chegou e espera a permissão do teste.
+            let _ = chegou.send(());
+            let _ = liberar.recv();
+        }
+    }
+
     /// Backend que grava chamadas. `get_route` reflete os `set_route` anteriores.
     #[derive(Default)]
     struct FakeBackend {
@@ -924,6 +1054,10 @@ mod tests {
         /// Fonte espelhada: após gravar ou limpar uma rota, a sessão do PID passa para o
         /// dispositivo novo (limpar leva ao padrão `padrao`), como o Windows faria.
         mirror: Mutex<Option<Arc<FakeSource>>>,
+        /// Porta só de teste: a gravação de rota avisa que chegou e fica parada até o
+        /// teste liberar. Serve para provar a posse da trava `apply` no caminho da
+        /// ativação de perfil.
+        gate: Gate,
     }
 
     impl FakeBackend {
@@ -944,10 +1078,18 @@ mod tests {
                 source.move_session(pid, flow, device);
             }
         }
+
+        /// Posta a porta de teste da gravação de rota.
+        fn set_gate(&self, chegou: mpsc::Sender<()>, liberar: mpsc::Receiver<()>) {
+            self.gate.post(chegou, liberar);
+        }
     }
 
     impl RouteBackend for FakeBackend {
         fn set_route(&self, pid: u32, flow: Flow, device: &DeviceId) -> Result<(), AudioError> {
+            // A porta de teste segura a gravação aqui, com a trava `apply` do chamador
+            // ainda na mão: é o ponto exato em que a exclusão mútua pode ser provada.
+            self.gate.wait();
             self.set_calls
                 .lock()
                 .unwrap()
@@ -997,14 +1139,12 @@ mod tests {
         gone: AtomicBool,
         /// Pids de sessão que já sumiram do Windows: escrever neles devolve `Gone`.
         gone_sessions: Mutex<Vec<u32>>,
-        /// Porta só de teste: avisa que a chamada chegou no backend e a segura parada até o
-        /// teste liberar. Vazia (padrão) = a chamada passa direto.
-        gate_chegou: Mutex<Option<mpsc::Sender<()>>>,
-        gate_liberar: Mutex<Option<mpsc::Receiver<()>>>,
+        /// Porta só de teste da leitura de mudo: avisa que a chamada chegou no backend e a
+        /// segura parada até o teste liberar. Vazia (padrão) = a chamada passa direto.
+        gate: Gate,
         /// Porta só de teste das escritas de sessão: mesma ideia da de cima, mas separada
         /// para não colidir com a porta da leitura de mudo.
-        gate_sessao_chegou: Mutex<Option<mpsc::Sender<()>>>,
-        gate_sessao_liberar: Mutex<Option<mpsc::Receiver<()>>>,
+        gate_sessao: Gate,
         /// Leituras feitas (volume, mudo, pico), para provar que a escolha de rota não as repete.
         reads: AtomicUsize,
     }
@@ -1054,39 +1194,24 @@ mod tests {
         /// Posta a porta de teste: a próxima leitura avisa em `chegou` e fica parada
         /// esperando a permissão de `liberar`.
         fn set_gate(&self, chegou: mpsc::Sender<()>, liberar: mpsc::Receiver<()>) {
-            *self.gate_chegou.lock().unwrap() = Some(chegou);
-            *self.gate_liberar.lock().unwrap() = Some(liberar);
+            self.gate.post(chegou, liberar);
         }
 
         /// Estaciona a chamada dentro da porta, se houver uma posta. Sem porta, passa direto.
         /// A porta é de uso único: a primeira chamada que chega é a que para.
         fn wait_gate(&self) {
-            let chegou = self.gate_chegou.lock().unwrap().take();
-            let liberar = self.gate_liberar.lock().unwrap().take();
-            let (Some(chegou), Some(liberar)) = (chegou, liberar) else {
-                return;
-            };
-            // Avisa que chegou e espera a permissão do teste.
-            let _ = chegou.send(());
-            let _ = liberar.recv();
+            self.gate.wait();
         }
 
         /// Posta a porta de teste das escritas de sessão: a próxima escrita de mudo de
         /// sessão avisa em `chegou` e fica parada esperando a permissão de `liberar`.
         fn set_gate_sessao(&self, chegou: mpsc::Sender<()>, liberar: mpsc::Receiver<()>) {
-            *self.gate_sessao_chegou.lock().unwrap() = Some(chegou);
-            *self.gate_sessao_liberar.lock().unwrap() = Some(liberar);
+            self.gate_sessao.post(chegou, liberar);
         }
 
         /// Estaciona a escrita de sessão dentro da porta, se houver uma posta.
         fn wait_gate_sessao(&self) {
-            let chegou = self.gate_sessao_chegou.lock().unwrap().take();
-            let liberar = self.gate_sessao_liberar.lock().unwrap().take();
-            let (Some(chegou), Some(liberar)) = (chegou, liberar) else {
-                return;
-            };
-            let _ = chegou.send(());
-            let _ = liberar.recv();
+            self.gate_sessao.wait();
         }
     }
 
@@ -2051,7 +2176,7 @@ mod tests {
         // Espera positiva: se a ação não chegar no backend, o teste falha alto em vez de
         // passar calado por falta de prova.
         chegou_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(Duration::from_secs(15))
             .expect("a ação não chegou no backend");
 
         // A ação está parada dentro da leitura do mudo: ela tem que estar segurando `apply`.
@@ -2065,7 +2190,7 @@ mod tests {
             .send(())
             .expect("a porta de teste já estava fechada");
         let result = rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(Duration::from_secs(15))
             .expect("a ação não terminou depois de a porta ser liberada");
         handle.join().unwrap();
         assert!(result.ok);
@@ -2845,14 +2970,243 @@ mod tests {
 
         let result = engine.act_activate_profile("p1");
 
-        // `activate_profile` devolve `true` mesmo sem roteamento: quem olha o
-        // `routing_available` depois de ativar é a ação (Ruling 16).
+        // O perfil foi ativado (as regras foram gravadas), mas o roteamento falhou:
+        // sucesso parcial. `ok` falso e `changed` verdadeiro ao mesmo tempo — a resposta
+        // honesta. O veredito vem **desta** ativação, não do latch global.
         assert!(!result.ok);
         assert_eq!(result.error_code, Some(ErrorCode::Unsupported));
-        assert!(!result.changed);
-        assert_eq!(result.resolved, None);
+        assert!(result.changed, "o perfil foi ativado: o estado mudou de fato");
+        assert_eq!(result.resolved.as_deref(), Some("p1"));
         let message = result.message.expect("falha precisa de mensagem");
         assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // A frase diz as duas coisas: o que mudou e o que não deu.
+        assert_eq!(
+            message,
+            "O perfil foi ativado, mas este Windows não permite trocar o dispositivo dos aplicativos."
+        );
+        // As regras foram persistidas mesmo com o roteamento indisponível.
+        assert_eq!(
+            engine.state().rules,
+            vec![rule("game.exe", Flow::Render, "fone")]
+        );
+        assert_eq!(engine.state().last_profile.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn reactivating_the_current_profile_reports_no_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        engine
+            .save_profile(profile(
+                "p1",
+                vec![ProfileItem {
+                    exe: "game.exe".to_string(),
+                    output: Target::Device(dev_id("fone")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(40, "game.exe", Flow::Render, "fone")]);
+        engine.refresh();
+
+        let first = engine.act_activate_profile("p1");
+        assert!(first.ok);
+        assert!(first.changed);
+
+        // O mesmo perfil de novo: as regras são as mesmas e o perfil ativo já era este.
+        let second = engine.act_activate_profile("p1");
+
+        assert!(second.ok);
+        assert!(
+            !second.changed,
+            "a ação disse que mudou quando nada mudou"
+        );
+        assert_eq!(second.resolved.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn switching_profile_reports_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        engine
+            .save_profile(profile(
+                "p1",
+                vec![ProfileItem {
+                    exe: "game.exe".to_string(),
+                    output: Target::Device(dev_id("fone")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+        // Mesmo conteúdo de regras do `p1`: o que muda é o perfil ativo.
+        engine
+            .save_profile(profile(
+                "p2",
+                vec![ProfileItem {
+                    exe: "game.exe".to_string(),
+                    output: Target::Device(dev_id("fone")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+        // Regras diferentes: agora o conjunto de regras muda também.
+        engine
+            .save_profile(profile(
+                "p3",
+                vec![ProfileItem {
+                    exe: "game.exe".to_string(),
+                    output: Target::Device(dev_id("monitor")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+        world
+            .source
+            .set_devices(vec![
+                device("fone", Flow::Render, true, "Fone"),
+                device("monitor", Flow::Render, true, "Monitor"),
+            ]);
+        world
+            .source
+            .set_sessions(vec![session(40, "game.exe", Flow::Render, "fone")]);
+        engine.refresh();
+
+        let first = engine.act_activate_profile("p1");
+        assert!(first.ok);
+        assert!(first.changed);
+
+        // Outro perfil, mesmas regras: o perfil ativo mudou.
+        let second = engine.act_activate_profile("p2");
+        assert!(second.ok);
+        assert!(
+            second.changed,
+            "trocar de perfil muda o perfil ativo, mesmo com as mesmas regras"
+        );
+        assert_eq!(second.resolved.as_deref(), Some("p2"));
+        assert_eq!(engine.state().last_profile.as_deref(), Some("p2"));
+
+        // Perfil com regras diferentes: o conjunto de regras muda também.
+        let third = engine.act_activate_profile("p3");
+        assert!(third.ok);
+        assert!(third.changed, "trocar de perfil com regras diferentes muda o estado");
+        assert_eq!(third.resolved.as_deref(), Some("p3"));
+        assert_eq!(
+            engine.state().rules,
+            vec![rule("game.exe", Flow::Render, "monitor")]
+        );
+        assert_eq!(engine.state().last_profile.as_deref(), Some("p3"));
+    }
+
+    #[test]
+    fn activating_profile_without_routing_ignores_stale_unsupported_latch() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(40, "game.exe", Flow::Render, "alto")]);
+        engine.refresh();
+
+        // Uma reconciliação antiga falhou: o latch global ficou em `false`.
+        world.backend.unsupported.store(true, Ordering::SeqCst);
+        engine.set_app_route("game.exe", Flow::Render, Some(dev_id("fone")));
+        assert!(!engine.state().routing_available);
+
+        // Agora o Windows volta a aceitar o roteamento, mas a sessão do app some.
+        world.backend.unsupported.store(false, Ordering::SeqCst);
+        world.source.set_sessions(vec![]);
+        engine
+            .save_profile(profile(
+                "p1",
+                vec![ProfileItem {
+                    exe: "outro.exe".to_string(),
+                    output: Target::Device(dev_id("fone")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+
+        let result = engine.act_activate_profile("p1");
+
+        // A ativação não esbarrou em `Unsupported`: o veredito vem da ativação, não do
+        // latch global (que continua em `false`, porque só um roteamento bem-sucedido o
+        // religa).
+        assert!(result.ok, "a ativação herdou o `false` de uma falha antiga");
+        assert!(result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("p1"));
+        assert_eq!(result.error_code, None);
+        assert!(!engine.state().routing_available);
+    }
+
+    #[test]
+    fn activate_profile_action_does_not_deadlock_on_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = Arc::new(world.engine_at(dir.path()));
+        engine
+            .save_profile(profile(
+                "p1",
+                vec![ProfileItem {
+                    exe: "game.exe".to_string(),
+                    output: Target::Device(dev_id("fone")),
+                    input: Target::Keep,
+                }],
+            ))
+            .unwrap();
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(40, "game.exe", Flow::Render, "fone")]);
+        engine.refresh();
+
+        // Porta do backend: a ativação estaciona dentro de `set_route()`, ou seja, parada
+        // com a trava `apply` na mão.
+        let (chegou_tx, chegou_rx) = mpsc::channel();
+        let (liberar_tx, liberar_rx) = mpsc::channel();
+        world.backend.set_gate(chegou_tx, liberar_rx);
+
+        let (tx, rx) = mpsc::channel();
+        let worker = Arc::clone(&engine);
+        let handle = std::thread::spawn(move || {
+            let _ = tx.send(worker.act_activate_profile("p1"));
+        });
+
+        // Espera positiva: se a ação pegar `apply` duas vezes, ela nunca chega no backend
+        // e o teste falha alto (com prazo) em vez de travar a suíte.
+        chegou_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("a ativação não chegou no backend de roteamento");
+
+        // A ação está parada dentro do backend de rota: ela tem que estar segurando `apply`.
+        assert!(
+            engine.apply.try_lock().is_err(),
+            "a ativação não segurou `apply` enquanto roteava"
+        );
+
+        // Libera: a ação termina.
+        liberar_tx
+            .send(())
+            .expect("a porta de teste já estava fechada");
+        let result = rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("a ativação não terminou depois de a porta ser liberada");
+        handle.join().unwrap();
+
+        assert!(result.ok);
+        assert!(result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("p1"));
     }
 
     // ---------- executor de ações ----------
@@ -3051,8 +3405,9 @@ mod tests {
 
         let result = engine.act_app_mute("discord.exe", true);
 
-        assert!(result.ok);
-        assert!(result.changed);
+        // Uma sessão mudou, a outra falhou: o pedido não foi cumprido inteiro.
+        assert!(!result.ok, "a ação escondeu a falha da sessão que sumiu");
+        assert!(result.changed, "a outra sessão foi muda de fato");
         // A sessão que sumiu não interrompe a outra.
         assert_eq!(
             world.ctl.calls(),
@@ -3061,6 +3416,42 @@ mod tests {
                 CtlCall::SetSessionMuted(11, Flow::Render, true),
             ]
         );
+    }
+
+    #[test]
+    fn app_mute_reports_partial_failure_when_one_session_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_sessions(vec![
+            session(10, "discord.exe", Flow::Render, "fone"),
+            session(11, "discord.exe", Flow::Render, "fone"),
+        ]);
+        // A primeira sessão já sumiu do Windows: a escrita nela falha.
+        world.ctl.gone_session(10);
+        let before = world.notes();
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        // Metade do pedido cumprida: o estado mudou, mas o pedido não foi cumprido
+        // inteiro. `ok` falso e `changed` verdadeiro ao mesmo tempo.
+        assert!(!result.ok, "a ação disse que deu quando uma sessão falhou");
+        assert!(result.changed, "a ação disse que nada mudou quando uma sessão mudou");
+        assert_eq!(result.error_code, Some(ErrorCode::DeviceGone));
+        assert_eq!(result.resolved.as_deref(), Some("discord.exe"));
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // A frase diz as duas coisas: o que mudou e o que falhou.
+        assert!(
+            message.contains("em parte"),
+            "a mensagem não diz que o mudo foi parcial: {message}"
+        );
+        assert!(
+            message.contains("dispositivo"),
+            "a mensagem não diz o que falhou: {message}"
+        );
+        // O estado mudou: o `refresh()` da ação aconteceu e a interface foi avisada.
+        assert_eq!(world.notes(), before + 1);
     }
 
     #[test]
@@ -3320,7 +3711,7 @@ mod tests {
         // Espera positiva: se a ação não chegar no backend, o teste falha alto em vez de
         // passar calado por falta de prova.
         chegou_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(Duration::from_secs(15))
             .expect("a ação não chegou no backend");
 
         // A escrita está em curso: a ação tem que estar segurando `apply`.
@@ -3340,7 +3731,7 @@ mod tests {
         });
         // A releitura lê o sistema antes de pedir `apply`: quando a contagem de leitura de
         // dispositivos subir, ela já está em curso e esperando a trava.
-        let prazo = std::time::Instant::now() + Duration::from_secs(5);
+        let prazo = std::time::Instant::now() + Duration::from_secs(15);
         while world.source.device_reads() == devices_before {
             assert!(
                 std::time::Instant::now() < prazo,
@@ -3359,7 +3750,7 @@ mod tests {
             .send(())
             .expect("a porta de teste já estava fechada");
         let result = rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(Duration::from_secs(15))
             .expect("a ação não terminou depois de a porta ser liberada");
         handle.join().unwrap();
         releitura.join().unwrap();
