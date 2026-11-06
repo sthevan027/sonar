@@ -9,8 +9,8 @@ Legenda de marcação: **[código]** = verificado no repo (`arquivo:linha`); **[
 ## 1. Escopo e fontes
 
 - **Commit examinado:** `2d35fe2078f6da3a586bf026117b3d16a8e17c46`, branch `main` (último merge: PR #3, `fix/versao-0.1.1`). Clone raso em `D:\Projetos\sonar`. [código]
-- **Branch `feat/sonar-v1` não encontrado no remoto.** A nota do vault (`1-Projetos/audio-control.md`, 2026-11-03) menciona esse branch com backend e telas. O `fetch` falhou e o ref não resolve. Se o trabalho mais novo estiver em outro lugar, esta análise não o cobre. [código]
-- **Análise anterior (`sonar-analise-repositorio.md`):** não encontrada. Busca por nome e conteúdo no vault não retornou nada; a busca por glob em `D:\Projetos` estourou o tempo, então a ausência não é exaustiva. Não foi usada.
+- **Branch** `feat/sonar-v1` **não encontrado no remoto.** A nota do vault (`1-Projetos/audio-control.md`, 2026-11-03) menciona esse branch com backend e telas. O `fetch` falhou e o ref não resolve. Se o trabalho mais novo estiver em outro lugar, esta análise não o cobre. [código]
+- **Análise anterior (**`sonar-analise-repositorio.md`**):** não encontrada. Busca por nome e conteúdo no vault não retornou nada; a busca por glob em `D:\Projetos` estourou o tempo, então a ausência não é exaustiva. Não foi usada.
 - **Notas do vault:** a nota `audio-control.md` diz "Fora: equalizador/efeitos", o que bate com o código. A mesma nota diz que o updater não estava mergeado; **isso está desatualizado**: `src-tauri/src/updates.rs` existe e é ligado em `lib.rs:15, 65-66, 86-88`. [código]
 - **Lido no código:** `lib.rs`, `engine.rs` (produção completa, até `build_state`; testes só parcialmente), `commands.rs`, `state.rs`, `shell.rs:1-140` e assinaturas do restante, `audio/policy.rs:1-135`, `audio/endpoint.rs` (trait e impl), `audio/devices.rs` e `audio/default_device.rs` (assinaturas e cabeçalhos), `store.rs`, `profiles.rs`, `rules.rs` (assinaturas), `Cargo.toml`, `tauri.conf.json`, `capabilities/default.json`, `src/api.ts`, `docs/DECISOES.md`.
 - **Lido parcialmente ou não lido:** `docs/superpowers/specs/2026-11-02-audio-control-design.md` e `docs/superpowers/plans/2026-11-03-sonar-v1.md` (só listados e citados por trechos de busca), `spike/`, toda a UI React além de `api.ts`.
@@ -27,12 +27,14 @@ Legenda de marcação: **[código]** = verificado no repo (`arquivo:linha`); **[
 ## 2. Diagnóstico do código existente
 
 ### 2.1 Stack e camadas [código]
+
 - Tauri 2 (Rust no backend, React/TypeScript na UI). `src-tauri/Cargo.toml:16-27`.
 - COM/Win32 pelo crate `windows` 0.62, com as features de áudio, WinRT e shell. `Cargo.toml:33-52`.
 - Uma janela `panel` (420x700, sem decoração, oculta no início). `tauri.conf.json:13-26`.
 - Persistência em JSON versionado (`{"version": N, "data": ...}`). `store.rs:3`.
 
 ### 2.2 Como o áudio é controlado hoje
+
 | Função | Mecanismo | Onde | Natureza |
 |---|---|---|---|
 | Enumerar endpoints | `IMMDeviceEnumerator` | `devices.rs:62-66`, `121` | Documentada |
@@ -45,10 +47,12 @@ Legenda de marcação: **[código]** = verificado no repo (`arquivo:linha`); **[
 | Rotear app para dispositivo | `AudioPolicyConfig` declarada à mão, IID e índice de vtable por variante | `policy.rs:28-37`, `77-96`, `232-240` | **Não documentada** |
 
 Pontos de atenção:
+
 - O roteamento depende de **IIDs e índices de vtable** fixos por variante de build (`policy.rs:35-37`, `77-82`, `92-96`). `variant_for_build` cobre Win11 a partir de 21390 e Downlevel a partir de 19041 (`policy.rs:28-31`, `66-74`). Isso é frágil por natureza: quebra silenciosa ou falha em builds novas. O próprio `DECISOES.md:44-47` reconhece que a interface foi "declarada na mão". [código]
 - O único teste de roteamento real é `#[ignore]` e exige variáveis de ambiente e um app tocando áudio (`policy.rs:325-327`). Persistência da rota (sobreviver a reinício) está em aberto. [código, DECISOES.md:52]
 
 ### 2.3 Estado, regras e perfis
+
 - `Engine` guarda tudo em `Inner` (`engine.rs:44-62`) e serializa operações com quatro travamentos, sempre nessa ordem: `apply` > `persist` > `emit` > `inner` (`engine.rs:4-9`). [código]
 - Contador `generation` impede que uma leitura do sistema que começou antes de uma mudança do usuário sobrescreva essa mudança (`engine.rs:59-61`, `406-419`). Esta é a garantia mais importante a preservar. [código]
 - Regras: `Rule { exe, flow, device }` (`rules.rs:10`), um conjunto com `upsert`/`remove` (`rules.rs:34-51`), aplicadas por `reconcile`/`reconcile_rule` (`rules.rs:61`, `76`).
@@ -57,12 +61,14 @@ Pontos de atenção:
 - `last_profile` existe só em memória (`engine.rs:53`, `state.rs:77`). [código]
 
 ### 2.4 Atalho global
+
 - Um atalho só, de `Settings.shortcut` (padrão `"Super+Alt+V"`, `state.rs:13, 20`). [código]
 - O handler do plugin faz uma única coisa: `shell::toggle_from_shortcut` (`lib.rs:53-61`, `shell.rs:192`). Não existe registro de ações. [código]
 - Registro e troca do atalho: `shell.rs:252` (trait), `279` (impl), `338` (`apply_at_startup`), `350` (`apply_settings`, que valida antes de gravar; `commands.rs:167-172`). [código]
 - Permissão do plugin: `global-shortcut:default` em `capabilities/default.json:6`. [código]
 
 ### 2.5 IPC e eventos
+
 - 22 comandos registrados em `lib.rs:69-89`. Camada fina em `commands.rs:43-172`. Erros viram `String` em português (`commands.rs:28-41`). [código]
 - Eventos: `state-changed` com snapshot completo (`commands.rs:15`, `engine.rs:471-475`) e `mic-level` a ~15 Hz com o painel aberto (`commands.rs:17`, `lib.rs:38-40`, `174-193`). [código]
 - A interface chama comandos específicos por ação (`set_app_route`, `set_device_volume`, `set_default_device` etc.). As ações **não são um conceito** no backend. [código, `src/api.ts`]
@@ -70,6 +76,7 @@ Pontos de atenção:
 - `set_session_volume` e `set_session_muted` trabalham **por pid** (`engine.rs:315-326`, `commands.rs:53-75`). Mudo "por app" exige expandir exe para pids. [código]
 
 ### 2.6 Segurança e configuração
+
 - CSP restrita (`tauri.conf.json:28-30`). [código]
 - Capabilities: só a janela `panel` (`default.json:5`). [código]
 - Comandos próprios do app não aparecem em permissões. Em Tauri v2 é preciso confirmar se isso dispensa permissão explícita. **PENDENTE** (ver §6).
@@ -77,6 +84,7 @@ Pontos de atenção:
 - `tauri-plugin-single-instance` ignora os argumentos da segunda execução (`lib.rs:46-48`). Hoje não há entrada por linha de comando. [código]
 
 ### 2.7 Lacunas reais para os objetivos
+
 - **L1. Não há camada de ações.** Ações existem só como comandos IPC específicos. Não há como disparar "mutar saída padrão" por atalho ou bandeja sem duplicar lógica. [código]
 - **L2. Não há ação de perfil por atalho nem ciclo de perfis.** `last_profile` não é persistido. [código]
 - **L3. Não há alvo "padrão" resolvido na execução.** Já existe `default_capture()` (`engine.rs:366-372`), mas não um equivalente para render nem uma resolução centralizada. [código]
@@ -91,6 +99,7 @@ Pontos de atenção:
 ## 3. Objetivos e não objetivos
 
 **Objetivos**
+
 - O1. Camada única de **ações globais** (`Action` + dispatcher), usada por UI, bandeja, atalhos e futuras entradas.
 - O2. Ativar perfil por atalho e ciclar perfis.
 - O3. Mutar/desmutar e ajustar volume da saída padrão e do microfone padrão; mutar app por exe.
@@ -98,6 +107,7 @@ Pontos de atenção:
 - O5. Preservar o contrato atual: snapshot `AppState`, eventos e a garantia de `generation`.
 
 **Não objetivos**
+
 - Comando de voz. Não é requisito.
 - Detecção automática de jogo ou de perfil (DECISOES.md:16 mantém ativação manual).
 - Implementar EQ neste estudo, ou construir APO/driver próprio na próxima versão.
@@ -127,6 +137,7 @@ Convenções: "padrão" é resolvido **no momento da execução**, dentro do tra
 | A12 | Reaplicar regras | interno | `refresh` | — | Sim | — | Existe, não exposto (`engine.rs:126`) |
 
 Observações:
+
 - A2 e A3 usam o `Engine::activate_profile` existente. A3 precisa de persistência de `last_profile` se o ciclo tiver que sobreviver a reinício. Hoje ele não sobrevive. [código]
 - A4 e A5 precisam de um **helper de resolução**: `default_render()` e `default_capture()` (este já existe em `engine.rs:366`). [código]
 - Erros de `AudioError::Os(code)` viram mensagem com código hexadecimal (`commands.rs:32`). No atalho, a mensagem deve ir para o `save_error`-like de ação ou para evento próprio, não para pop-up da janela (que pode estar oculta).
@@ -153,13 +164,15 @@ flowchart LR
 ```
 
 Passos incrementais, cada um testável sozinho:
-1. **Extrair `Action` e o resolvedor de alvos** para `actions.rs`, sem alterar comportamento. Os comandos IPC atuais continuam chamando o `Engine`. Testes com os fakes já existentes.
+
+1. **Extrair** `Action` **e o resolvedor de alvos** para `actions.rs`, sem alterar comportamento. Os comandos IPC atuais continuam chamando o `Engine`. Testes com os fakes já existentes.
 2. **Adicionar o dispatcher** (fila + worker) e migrar a bandeja e o atalho para ele. O handler do atalho apenas enfileira, para nunca bloquear o thread do plugin. [hipótese: o plugin chama o handler em thread própria; confirmar]
 3. **Bindings de atalho** em `Settings` (§7), com migração de `shortcut` legado.
 4. **Ações de microfone** (depois de S1).
 5. **Ponto de inserção do EQ** (só após decisão em §9).
 
 Fluxos principais:
+
 - **Atalho de mudo:** tecla → plugin → fila → worker → `apply` → `resolve(default_render)` → `ctl.set_muted` → `refresh` → `emit` → UI.
 - **Slider da UI:** mantém o comando atual `set_device_volume` (sem mudança de contrato).
 - **Perfil por atalho:** tecla → fila → `activate_profile` (já existente).
@@ -173,6 +186,7 @@ Regra de ouro: o dispatcher **não segura travamento próprio durante chamada CO
 **Resolução de alvos.** Enum `Target` de ação: `DefaultOutput`, `DefaultInput`, `Device(id)`, `App(exe)`, `Profile(id)`, `Global`. Resolver em um único lugar, sob `apply`, com o snapshot do momento. Registrar no resultado o `resolved` (ex.: id do dispositivo efetivamente afetado).
 
 **Concorrência.**
+
 - Fila única (`mpsc`) com worker. Os produtores (atalho, bandeja, IPC) nunca esperam a execução.
 - Coalescer ações relativas (A6) por alvo, com janela curta (proposta: ~50 a 100 ms). Ações absolutas (A4, A7, A8) não precisam de coalescência; a última vence.
 - O `Engine` já serializa com `apply` (`engine.rs:79-80`). Não criar um segundo lock de dados.
@@ -180,12 +194,14 @@ Regra de ouro: o dispatcher **não segura travamento próprio durante chamada CO
 **Idempotência.** Preferir `set`. Para `toggle` (se existir), ler sob `apply` e registrar `changed: bool`. Não gravar em disco quando `changed == false`.
 
 **Atalhos e conflitos.**
+
 - Validar sintaxe antes de gravar; rejeitar binding duplicado dentro do próprio app.
 - Registro falhando (ex.: tecla usada por outro app ou reservada pelo sistema): o binding fica "indisponível", com mensagem, e os demais continuam. **Hipótese:** o plugin devolve erro nesse caso (o código já trata `register` como `Result`, `shell.rs:252`). Confirmar.
 - Ao trocar o atalho, **desregistrar o antigo antes de registrar o novo**. Fonte secundária (dev.to) recomenda isso; confirmar na doc oficial.
 - Teclas reservadas pelo Windows (ex.: Win+L) são **hipótese** de falha de registro; testar no Win11 26300.
 
 **Segurança.**
+
 - Ações só entram como enum tipado (`serde` com tag). Tipo desconhecido é rejeitado com erro, não ignorado.
 - Validar exe com `apps::parse_exe_request` (já existe, `apps.rs:76`, e rejeita UNC, verbatim e caminho relativo, segundo o próprio teste).
 - Device id precisa existir no snapshot. Volume é clamp (`endpoint.rs:24`). Limitar tamanho de strings de nome e de accelerator.
@@ -197,12 +213,15 @@ Regra de ouro: o dispatcher **não segura travamento próprio durante chamada CO
 ## 7. Modelos de dados, contratos e migração
 
 ### 7.1 Perfil (atual) [código]
+
 `{ id, icon, name?, items: [{ exe, output: "default"|"keep"|<device id>, input: ... }] }` (`profiles.rs:15-70`). Sem mudança obrigatória para as ações de perfil.
 
 ### 7.2 Settings (proposta, aditiva)
+
 Hoje: `{ shortcut: "Super+Alt+V", autostart: false }` (`state.rs:9-24`), com `#[serde(default)]` (`state.rs:11`).
 
 Proposta: acrescentar `bindings`, mantendo `shortcut` para leitura legada:
+
 ```json
 {
   "shortcut": "Super+Alt+V",
@@ -214,20 +233,25 @@ Proposta: acrescentar `bindings`, mantendo `shortcut` para leitura legada:
   ]
 }
 ```
+
 Exemplos de ações (design, não implementação): `{"type":"activate_profile","profile_id":"p1"}`, `{"type":"set_output_mute","muted":true}`, `{"type":"step_output_volume","delta":0.05}`, `{"type":"set_app_mute","exe":"discord.exe","muted":true}`, `{"type":"move_app","exe":"chrome.exe","device":"<id>|null"}`.
 
 **Migração:** `shortcut` legado vira `bindings: [{ accelerator: shortcut, action: { type: "toggle_panel" } }]` na primeira leitura. Como `Store` já grava `.bak` antes de sobrescrever (`store.rs:49-68`), a migração pode ser reversível.
 
 ### 7.3 Versão do Store
+
 - `CURRENT_VERSION = 1` (`store.rs:12`). Para mudanças aditivas com `serde(default)`, não é preciso migração. Para renomear `shortcut` → `bindings`, é preciso um passo de migração em `Store::load` ou em `Settings::from_legacy`, condicionado à versão. [código + proposta]
 
 ### 7.4 Contratos IPC (exemplificativos)
+
 - `dispatch_action(action) -> { ok, changed, resolved, error_code }`
 - Evento opcional `action-result` (ou reutilizar `state-changed`).
 - Manter `set_*` existentes para a UI, sem quebra.
 
 ### 7.5 Modelo de EQ (proposta de design, não implementar)
+
 Documento separado `eq.json`, com versão própria, indexado por id do endpoint:
+
 ```json
 {
   "version": 1,
@@ -243,6 +267,7 @@ Documento separado `eq.json`, com versão própria, indexado por id do endpoint:
   }
 }
 ```
+
 Tipos de filtro sugeridos: `peaking`, `lowshelf`, `highshelf`, `highpass`, `lowpass`, `notch`.
 Limites **propostos** (sem fonte nesta sessão): frequência 20 Hz até metade da taxa de amostragem; ganho de -24 a +12 dB; Q de 0,1 a 10; até 31 bandas; preamp para evitar clipagem.
 Um perfil poderia referenciar `eq_preset_id` no futuro. Não implementar agora.
@@ -280,11 +305,13 @@ Legenda: "não medido" = nenhum valor de latência foi medido.
 **Comandos (MVP): seguir sem EQ.** Implementar o dispatcher (§5 e §6) e as ações A2, A3, A4, A6, A7 e A8. Não exige driver, não exige admin, e pode ser testado com os fakes existentes (`engine.rs:606-...`) e manualmente no Win11 26300.
 
 **Equalizador: decidir antes de codar.** Recomendação (proposta):
+
 1. Caminho de menor risco: **(a) integração opcional com Equalizer APO**, por dispositivo, com spike S3 (detectar, configurar, bypass e comportamento em hotplug).
 2. **Não** construir APO próprio na próxima versão (b).
 3. EQ **por app** só depois de medir latência e custo do caminho (c2) com dispositivo virtual (S5), e de decidir a licença (D2/D3).
 
 Alternativas com tradeoffs:
+
 - Se o EQ precisa ser por app desde o início, o caminho é (c2), com dependência de driver virtual de terceiro e latência não medida.
 - Se o produto for fechado e não quiser depender de GPL nem de terceiros, sobra (c) com driver próprio, que é o caminho de maior custo.
 
@@ -293,6 +320,7 @@ Alternativas com tradeoffs:
 ## 10. Fases de entrega e spikes
 
 ### Fases (cada uma com aceite e teste manual no Win11 26300)
+
 - **F0. Refatoração sem mudança de comportamento.** Criar `actions.rs` e o resolvedor de alvos (§5, passo 1).
   - Aceite: todos os testes atuais passam; nenhuma mudança na UI; `state.rs` e `store.rs` sem alteração de formato.
   - Manual: trocar saída de um app, mutar, mudar volume, trocar perfil pela UI. Nada muda.
@@ -305,11 +333,12 @@ Alternativas com tradeoffs:
 - **F3. Ciclo de perfil e próxima saída (A3, A10).** Requer decidir persistência de `last_profile` (§11 D4).
   - Aceite: ciclo volta ao primeiro após o último; perfil apagado não quebra o ciclo.
   - Manual: ciclar com três perfis; apagar o perfil atual pela UI e ciclar de novo.
-- **F4. Microfone (A5), depois de S1.**
+- **F4. Microfone (A5), depois de S1.Q**
   - Manual: mutar o microfone padrão pelo atalho e confirmar no Windows (ícone de mudo).
 - **F5. EQ, somente após decisão em §11 e spikes S3 e S5.** Não entra nesta fila.
 
 ### Spikes (PENDENTE até rodar)
+
 - **S1. Volume e mudo do endpoint de captura.** Verificar `IAudioEndpointVolume` em microfone real. Hoje só há um microfone no PC de casa (DECISOES.md:39). **PENDENTE.**
 - **S2. Roteamento após reinício e fechamento do app.** Já listado como aberto (DECISOES.md:52). **PENDENTE.**
 - **S3. EQ via Equalizer APO.** Instalar em máquina de teste, aplicar configuração a um endpoint, testar bypass, troca de dispositivo, desconexão e reconexão, e observar os 10 erros do SysFX. Medir o que for medido. **PENDENTE.**
@@ -343,7 +372,7 @@ Os defaults são **proposta**; nenhum foi decidido.
 - **Atalhos globais.** Funcionam com qualquer app em foco e independem da rede e de o app de destino estar aberto; dependem só de o Sonar estar em execução.
   - Padrões propostos (todos reconfiguráveis nas Configurações, sem tecla fixa):
     - Ativar perfil 1 / 2 / … : `Ctrl+Alt+1`, `Ctrl+Alt+2` (ação A2).
-    - Mudo da saída padrão (toggle): `Ctrl+Alt+M` (ação A4). **Não usar `Ctrl+M`:** é atalho de muitos apps (ex.: Gmail, Teams) e um registro global o sobrescreveria em todos eles. [hipótese, a confirmar no S4]
+    - Mudo da saída padrão (toggle): `Ctrl+Alt+M` (ação A4). **Não usar** `Ctrl+M`**:** é atalho de muitos apps (ex.: Gmail, Teams) e um registro global o sobrescreveria em todos eles. [hipótese, a confirmar no S4]
     - Ciclar perfil: `Ctrl+Alt+P` (ação A3), consistente com a tabela do §8.
   - Antes de registrar um atalho, o app deve checar conflito com teclas já reservadas pelo sistema ou por outros apps (S4, ainda PENDENTE).
 - **Interpretação.** "Multi" no pedido foi lido como **mudo** (A4). "Control.md" foi lido como a nota `audio-control.md` do vault.

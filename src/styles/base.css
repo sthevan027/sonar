@@ -1280,8 +1280,11 @@ button.it:hover {
   height: 0;
 }
 
-/* Chip dentro da linha de um app: encolhe com reticências e deixa espaço para o nome. */
-.row .chip {
+/* Chip dentro da linha de um app: encolhe com reticências e deixa espaço para o nome.
+   O teto vai no .dmenu (item flex da linha), e não no .chip: dentro do .dmenu, que tem
+   position: relative, o percentual resolveria contra o próprio menu e o rótulo do
+   dispositivo ficaria espremido (ex.: "Headset" virava "H"). */
+.row .dmenu {
   max-width: 62%;
 }
 
