@@ -1,6 +1,7 @@
 // Funções puras da tela de configurações: atalho global e "Sobre". Sem JSX.
 
 import pkg from "../../package.json";
+import type { Binding, Profile } from "../types";
 
 export const APP_NAME = "Sonar";
 export const APP_VERSION = pkg.version;
@@ -72,4 +73,47 @@ export function shortcutFromKeys(input: KeyInput): ShortcutOutcome {
     return { status: "invalid", message: SHORTCUT_MODIFIER_MESSAGE };
   }
   return { status: "ok", shortcut: [...modifiers, main].join("+") };
+}
+
+/**
+ * Comparação de aceleradores: sem caixa e sem espaços, com os modificadores em ordem
+ * fixa. O Rust compara os atalhos *parseados*, então "ctrl+alt+m" e "Ctrl+Alt+M" são a
+ * mesma tecla — e "Alt+Super+V" é a mesma que "Super+Alt+V".
+ */
+export function normalizeAccelerator(accelerator: string): string {
+  const parts = accelerator.replace(/\s+/g, "").split("+").filter(Boolean);
+  const main = parts.pop() ?? "";
+  const modifiers = parts.map((part) => part.toLowerCase()).sort();
+  return [...modifiers, main.toLowerCase()].join("+");
+}
+
+/**
+ * Sugere atalhos `Ctrl+Alt+1` a `Ctrl+Alt+9` para os perfis que ainda não têm binding de
+ * perfil. O número começa na posição do perfil na lista (`Ctrl+Alt+1` para o primeiro) e
+ * pula para o próximo número livre quando o acelerador já está em uso por qualquer
+ * binding. No máximo nove sugestões.
+ */
+export function suggestProfileBindings(profiles: Profile[], existing: Binding[]): Binding[] {
+  const used = new Set(existing.map((binding) => normalizeAccelerator(binding.accelerator)));
+  const alreadyBound = new Set(
+    existing
+      .filter((binding) => binding.action.type === "activate_profile")
+      .map((binding) => (binding.action as { profile_id: string }).profile_id),
+  );
+
+  const suggestions: Binding[] = [];
+  profiles.forEach((profile, index) => {
+    if (suggestions.length >= 9) return;
+    // Perfil que já tem atalho não entra na lista.
+    if (alreadyBound.has(profile.id)) return;
+    let number = index + 1;
+    while (number <= 9 && used.has(normalizeAccelerator(`Ctrl+Alt+${number}`))) number += 1;
+    if (number > 9) return;
+    used.add(normalizeAccelerator(`Ctrl+Alt+${number}`));
+    suggestions.push({
+      accelerator: `Ctrl+Alt+${number}`,
+      action: { type: "activate_profile", profile_id: profile.id },
+    });
+  });
+  return suggestions;
 }

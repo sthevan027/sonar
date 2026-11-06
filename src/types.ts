@@ -71,6 +71,84 @@ export interface Settings {
   autostart: boolean;
 }
 
+/**
+ * `Settings` do Rust passa a trazer `bindings` (Task 12/14), mas o espelho do `Settings`
+ * aqui é das Tasks 12/14 — este arquivo não mexe nele. Esta interface só acrescenta o
+ * campo, para a tela de atalhos globais conseguir ler a lista de bindings.
+ */
+export interface SettingsWithBindings extends Settings {
+  bindings?: Binding[];
+}
+
+/**
+ * Ações globais: espelha `Action` de `src-tauri/src/actions.rs`. Enum com tag `type` em
+ * snake_case; `Direction` vira `"next"` / `"prev"`.
+ */
+export type Direction = "next" | "prev";
+
+export type Action =
+  | { type: "toggle_panel" }
+  | { type: "activate_profile"; profile_id: string }
+  | { type: "cycle_profile"; direction: Direction }
+  | { type: "set_output_mute"; muted: boolean }
+  | { type: "toggle_output_mute" }
+  | { type: "step_output_volume"; delta: number }
+  | { type: "set_output_volume"; value: number }
+  | { type: "set_app_mute"; exe: string; muted: boolean }
+  | { type: "move_app"; exe: string; device: string | null }
+  | { type: "cycle_default_output"; direction: Direction };
+
+/** Um atalho: a combinação de teclas e a ação que ela dispara. */
+export interface Binding {
+  accelerator: string;
+  action: Action;
+}
+
+/**
+ * Estado de um binding: `active` (registrado) ou `unavailable` com o motivo. A forma é
+ * fixa pela Ruling 41 — enum com tag `type` em snake_case.
+ */
+export type BindingStatus =
+  | { type: "active" }
+  | { type: "unavailable"; message: string };
+
+/**
+ * Uma entrada de estado por binding. O `accelerator` viaja junto do estado para a tela casar
+ * status x binding sem depender da ordem (a ordem muda quando um binding sai do meio).
+ */
+export type BindingStatusEntry = {
+  accelerator: string;
+  status: BindingStatus;
+};
+
+/** Motivo de uma falha, em código estável (`ErrorCode` do Rust, em snake_case). */
+export type ErrorCode =
+  | "profile_not_found"
+  | "no_profiles"
+  | "no_output_device"
+  | "not_enough_outputs"
+  | "device_gone"
+  | "unsupported"
+  | "os_error"
+  | "invalid_exe"
+  | "invalid_value"
+  | "queue_full"
+  | "internal";
+
+/**
+ * Resultado de uma ação: as mesmas cinco chaves do Rust, sempre presentes.
+ *
+ * `ok == false` **não** implica `changed == false`: existe a forma parcial (o estado mudou,
+ * mas o pedido não foi cumprido inteiro) e a `message` diz as duas coisas.
+ */
+export interface ActionResult {
+  ok: boolean;
+  changed: boolean;
+  resolved: string | null;
+  error_code: ErrorCode | null;
+  message: string | null;
+}
+
 export interface AppState {
   devices: DeviceView[];
   sessions: AudioSession[];

@@ -6,6 +6,7 @@ import type { Route } from "./routes";
 import { Devices } from "./screens/Devices";
 import { Panel } from "./screens/Panel";
 import { ProfileEditor } from "./screens/ProfileEditor";
+import { Bindings } from "./screens/Bindings";
 import { Settings } from "./screens/Settings";
 import { retryAppState } from "./store";
 
@@ -54,7 +55,12 @@ function Screen({ route, navigate }: { route: Route; navigate: (route: Route) =>
           }
           // Não há tela de lista de perfis: a barra de perfis mora no painel.
           onOpenProfiles={() => navigate({ name: "panel", tab: route.returnTab })}
+          onOpenBindings={() => navigate({ name: "bindings", returnTab: route.returnTab })}
         />
+      );
+    case "bindings":
+      return (
+        <Bindings onBack={() => navigate({ name: "settings", returnTab: route.returnTab })} />
       );
     case "devices":
       return (

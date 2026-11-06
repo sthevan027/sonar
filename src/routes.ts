@@ -16,4 +16,5 @@ export type Route =
   | { name: "panel"; tab: PanelTab }
   | { name: "profileEditor"; profileId?: string; returnTab: PanelTab }
   | { name: "settings"; returnTab: PanelTab }
-  | { name: "devices"; tab: DeviceTab; returnTab: PanelTab };
+  | { name: "devices"; tab: DeviceTab; returnTab: PanelTab }
+  | { name: "bindings"; returnTab: PanelTab };
