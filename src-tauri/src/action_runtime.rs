@@ -85,9 +85,12 @@ pub fn reporta_se_falhou(resultado: &ActionResult) -> bool {
 
 /// Publica uma falha: no log e no evento `action-result`.
 ///
-/// O painel pode estar oculto — o evento fica esperando ele abrir. O log garante que a
-/// informação não se perca.
+/// O painel pode estar oculto, e evento do Tauri não fica guardado: sem ninguém olhando,
+/// o aviso se perderia. Por isso a falha **mostra o painel** antes de emitir (o `App` do
+/// frontend ouve `action-result` em qualquer tela e mostra o Toast). O log garante que a
+/// informação não se perca nem se o painel não existir.
 pub fn publish_failure(app: &AppHandle, resultado: &ActionResult) {
+    shell::show_panel(app);
     publish_failure_to(
         &|evento, resultado| {
             let _ = app.emit(evento, resultado);

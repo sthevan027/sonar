@@ -34,6 +34,7 @@ const state: AppState = {
 vi.mock("./api", () => ({
   getState: vi.fn(async () => state),
   onStateChanged: vi.fn(async () => () => {}),
+  onActionResult: vi.fn(async () => () => {}),
   pendingUpdate: vi.fn(async () => null),
   onUpdateAvailable: vi.fn(async () => () => {}),
   onUpdateProgress: vi.fn(async () => () => {}),

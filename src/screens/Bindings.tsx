@@ -48,29 +48,39 @@ export function Bindings({ onBack }: BindingsProps) {
   // "Restaurar padrões" busca os padrões no Rust antes de gravar: o botão fica travado
   // enquanto a busca e a gravação acontecem (Ruling 42).
   const [restoring, setRestoring] = useState(false);
+  // Uma gravação por vez: cada `save_bindings` parte da lista que a tela tem agora, e duas
+  // em voo partiriam da mesma lista antiga (a segunda desfaria a primeira).
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
 
   // Estado de registro dos bindings: uma entrada por binding, casada pelo acelerador
-  // (a ordem muda quando um binding sai do meio da lista).
+  // (a ordem muda quando um binding sai do meio da lista). A falha de execução de uma ação
+  // (Toast) é ouvida no App, em qualquer tela.
   useEffect(() => {
     let alive = true;
+    let unlisten: (() => void) | undefined;
     api.getBindingStatus().then(
       (loaded) => {
         if (alive) setStatuses(loaded);
       },
       () => undefined,
     );
-    api.onBindingsStatus((loaded) => {
-      if (alive) setStatuses(loaded);
-    });
-    // Falha de execução da ação é Toast (D7): o atalho funcionou, foi a ação que falhou.
-    api.onActionResult((result) => {
-      if (!alive || result.ok) return;
-      notify(result.message ?? "Não foi possível executar a ação.");
-    });
+    api
+      .onBindingsStatus((loaded) => {
+        if (alive) setStatuses(loaded);
+      })
+      .then(
+        (stop) => {
+          if (alive) unlisten = stop;
+          else stop();
+        },
+        () => undefined,
+      );
     return () => {
       alive = false;
+      unlisten?.();
     };
-  }, [notify]);
+  }, []);
 
   // O store é a fonte da verdade: quando ele muda a lista, a tela acompanha.
   useEffect(() => {
@@ -88,17 +98,30 @@ export function Bindings({ onBack }: BindingsProps) {
     return statusByAccelerator.get(normalizeAccelerator(binding.accelerator)) ?? { type: "active" };
   }
 
+  /** Roda uma gravação; ignora o pedido se já há uma em voo. */
+  function exclusive(run: () => Promise<unknown>): Promise<unknown> {
+    if (savingRef.current) return Promise.resolve();
+    savingRef.current = true;
+    setSaving(true);
+    return run().finally(() => {
+      savingRef.current = false;
+      setSaving(false);
+    });
+  }
+
   /** Grava a lista inteira. A falha não muda a lista da tela. */
   function save(next: Binding[], opts: { onSuccess?: () => void } = {}) {
-    return api.saveBindings(next).then(
-      (loaded) => {
-        setList(next);
-        setStatuses(loaded);
-        opts.onSuccess?.();
-      },
-      (cause: unknown) => {
-        notify(errorMessage(cause, "Não foi possível salvar a configuração."));
-      },
+    return exclusive(() =>
+      api.saveBindings(next).then(
+        (loaded) => {
+          setList(next);
+          setStatuses(loaded);
+          opts.onSuccess?.();
+        },
+        (cause: unknown) => {
+          notify(errorMessage(cause, "Não foi possível salvar a configuração."));
+        },
+      ),
     );
   }
 
@@ -108,17 +131,19 @@ export function Bindings({ onBack }: BindingsProps) {
       editor.index === null
         ? [...list, binding]
         : list.map((item, i) => (i === editor.index ? binding : item));
-    api.saveBindings(next).then(
-      (loaded) => {
-        setList(next);
-        setStatuses(loaded);
-        setEditor(null);
-        setEditorError(null);
-      },
-      (cause: unknown) => {
-        // Nada é gravado: o editor continua aberto com a frase do backend.
-        setEditorError(errorMessage(cause, "Não foi possível salvar a configuração."));
-      },
+    void exclusive(() =>
+      api.saveBindings(next).then(
+        (loaded) => {
+          setList(next);
+          setStatuses(loaded);
+          setEditor(null);
+          setEditorError(null);
+        },
+        (cause: unknown) => {
+          // Nada é gravado: o editor continua aberto com a frase do backend.
+          setEditorError(errorMessage(cause, "Não foi possível salvar a configuração."));
+        },
+      ),
     );
   }
 
@@ -248,14 +273,20 @@ export function Bindings({ onBack }: BindingsProps) {
       </button>
 
       <div className="row" style={{ gap: 8 }}>
-        <button type="button" className="btn" style={{ flex: 1 }} onClick={suggest}>
+        <button
+          type="button"
+          className="btn"
+          style={{ flex: 1 }}
+          disabled={saving}
+          onClick={suggest}
+        >
           Sugerir atalhos de perfil
         </button>
         <button
           type="button"
           className="btn"
           style={{ flex: 1 }}
-          disabled={restoring}
+          disabled={restoring || saving}
           onClick={() => setConfirmRestore(true)}
         >
           Restaurar padrões

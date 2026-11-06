@@ -19,6 +19,7 @@ const state: AppState = {
 vi.mock("./api", () => ({
   getState: vi.fn(async () => state),
   onStateChanged: vi.fn(async () => () => {}),
+  onActionResult: vi.fn(async () => () => {}),
   getSettings: vi.fn(async () => ({ shortcut: "Super+Alt+V", autostart: false })),
   getDefaultBindings: vi.fn(async () => []),
   saveSettings: vi.fn(async () => undefined),

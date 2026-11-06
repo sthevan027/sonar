@@ -110,7 +110,10 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles, onOpenBindings
       () => {
         const current = base.current;
         if (!current) return Promise.resolve();
-        return api.saveSettings({ ...current, ...wanted.current });
+        // Só atalho e autostart: a lista de atalhos é da tela de atalhos. Reenviar o
+        // `bindings` do snapshot desfaria uma edição ainda em voo (ausente = não mexe).
+        const { shortcut, autostart } = { ...current, ...wanted.current };
+        return api.saveSettings({ shortcut, autostart });
       },
       (error: unknown) => {
         const rest = { ...wanted.current };

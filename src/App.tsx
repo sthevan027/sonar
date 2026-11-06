@@ -1,5 +1,6 @@
 import { Suspense, useState } from "react";
 import "./styles/base.css";
+import { ActionResultToasts } from "./components/ActionResultToasts";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/Toast";
 import type { Route } from "./routes";
@@ -15,6 +16,7 @@ export default function App() {
   return (
     <main className="win">
       <ToastProvider>
+        <ActionResultToasts />
         <ErrorBoundary onReset={retryAppState}>
           <Suspense fallback={null}>
             <Screen route={route} navigate={setRoute} />

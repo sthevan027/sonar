@@ -112,6 +112,17 @@ describe("Settings", () => {
     ).toBe("true");
   });
 
+  it("toggle_autostart_nao_reenvia_a_lista_de_atalhos", async () => {
+    // I3: reenviar `bindings` do snapshot desfaria uma edição ainda em voo no Rust.
+    setup(settings({ bindings: [PANEL_BINDING, MUTE_BINDING] }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Iniciar com o Windows" }));
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+    const enviado = vi.mocked(api.saveSettings).mock.calls[0][0];
+    expect("bindings" in enviado).toBe(false);
+    expect(enviado).toEqual({ shortcut: "Super+Alt+V", autostart: true });
+  });
+
   it("shortcut_capture_rejects_key_without_modifier_then_saves_combo", async () => {
     setup();
     const keys = await screen.findByRole("button", { name: /Atalho global: Win Alt V/ });
@@ -361,6 +372,38 @@ describe("Atalhos globais", () => {
 
     await waitFor(() => expect(api.getDefaultBindings).toHaveBeenCalled());
     await waitFor(() => expect(api.saveBindings).toHaveBeenCalledWith(defaults));
+  });
+
+  it("sugerir_com_duplo_clique_grava_uma_vez_so", async () => {
+    setupBindings([PANEL_BINDING]);
+    // A primeira gravação fica em voo: a segunda não pode partir da lista antiga.
+    vi.mocked(api.saveBindings).mockImplementationOnce(() => new Promise(() => undefined));
+    const suggest = await screen.findByRole("button", { name: "Sugerir atalhos de perfil" });
+
+    fireEvent.click(suggest);
+    fireEvent.click(suggest);
+
+    expect(api.saveBindings).toHaveBeenCalledTimes(1);
+    expect(suggest.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("a_tela_de_atalhos_cancela_as_assinaturas_ao_fechar", async () => {
+    const stopStatus = vi.fn();
+    vi.mocked(api.onBindingsStatus).mockResolvedValue(stopStatus);
+    setupBindings([PANEL_BINDING]);
+    await screen.findByText("Atalho global");
+    await waitFor(() => expect(api.onBindingsStatus).toHaveBeenCalled());
+
+    cleanup();
+
+    await waitFor(() => expect(stopStatus).toHaveBeenCalledTimes(1));
+  });
+
+  it("a_tela_de_atalhos_nao_ouve_action_result_sozinha", async () => {
+    // O aviso de falha é do App (vale em qualquer tela); aqui seria um listener a mais.
+    setupBindings([PANEL_BINDING]);
+    await screen.findByText("Atalho global");
+    expect(api.onActionResult).not.toHaveBeenCalled();
   });
 
   it("seletor_de_acao_lista_ciclar_perfil_e_ciclar_saida_padrao", async () => {
