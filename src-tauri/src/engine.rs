@@ -432,6 +432,10 @@ impl Engine {
     /// Vale para todas as sessões de saída desse app: uma sessão que já encerrou não
     /// interrompe as outras. Sem sessão do app, a ação dá certo sem mudar nada.
     ///
+    /// Só as sessões que estão fora do estado pedido são escritas. `changed` diz se o
+    /// estado mudou de fato: uma sessão que já estava no estado pedido não conta, e uma
+    /// escrita que o Windows recusou também não.
+    ///
     /// As sessões são lidas na hora (`source.sessions()`), não do snapshot guardado: um app
     /// que acabou de abrir ainda não está no cache, e mudá-lo pelo pid errado é o pior erro
     /// possível aqui.
@@ -449,16 +453,16 @@ impl Engine {
             Err(err) => return audio_failure(&err),
         };
         // Só a saída do app: o microfone está fora de escopo.
+        // E só as sessões que estão fora do estado pedido: uma sessão já no estado pedido
+        // não é escrita (seria desperdício) nem conta como mudança (seria mentira).
         let targets: Vec<&AudioSession> = sessions
             .iter()
             .filter(|s| s.flow == Flow::Render && s.exe.eq_ignore_ascii_case(&key))
+            .filter(|s| s.muted != muted)
             .collect();
-        // Sem sessão do app: não é erro, é só não ter o que mudar.
+        // Sem sessão do app, ou todas já no estado pedido: não é erro, é só não ter o que
+        // mudar. Nenhuma escrita, nenhum notificador, nenhuma releitura.
         if targets.is_empty() {
-            return ActionResult::done(false, Some(key));
-        }
-        // Já está do jeito pedido: nada muda e ninguém é avisado.
-        if !targets.iter().any(|s| s.muted != muted) {
             return ActionResult::done(false, Some(key));
         }
         let mut first_error: Option<AudioError> = None;
@@ -483,15 +487,17 @@ impl Engine {
                 self.lock().generation += 1;
             }
         }
-        if !changed {
-            return match first_error {
-                Some(err) => audio_failure(&err),
-                None => ActionResult::failed(ErrorCode::OsError, "O Windows recusou a operação."),
-            };
+        if changed {
+            // Fora do escopo da trava: o refresh já avisa a interface.
+            self.refresh();
+            return ActionResult::done(true, Some(key));
         }
-        // Fora do escopo da trava: o refresh já avisa a interface.
-        self.refresh();
-        ActionResult::done(true, Some(key))
+        // O branch de erro se keya pelo erro existir, não por `changed` ser falso: o caso
+        // "não havia nada a mudar" já saiu antes, e um `OsError` aqui seria erro falso.
+        match first_error {
+            Some(err) => audio_failure(&err),
+            None => ActionResult::failed(ErrorCode::OsError, "O Windows recusou a operação."),
+        }
     }
 
     /// Ativa um perfil como ação (A2). Id que não existe vira `profile_not_found` e nada
@@ -995,6 +1001,10 @@ mod tests {
         /// teste liberar. Vazia (padrão) = a chamada passa direto.
         gate_chegou: Mutex<Option<mpsc::Sender<()>>>,
         gate_liberar: Mutex<Option<mpsc::Receiver<()>>>,
+        /// Porta só de teste das escritas de sessão: mesma ideia da de cima, mas separada
+        /// para não colidir com a porta da leitura de mudo.
+        gate_sessao_chegou: Mutex<Option<mpsc::Sender<()>>>,
+        gate_sessao_liberar: Mutex<Option<mpsc::Receiver<()>>>,
         /// Leituras feitas (volume, mudo, pico), para provar que a escolha de rota não as repete.
         reads: AtomicUsize,
     }
@@ -1060,6 +1070,24 @@ mod tests {
             let _ = chegou.send(());
             let _ = liberar.recv();
         }
+
+        /// Posta a porta de teste das escritas de sessão: a próxima escrita de mudo de
+        /// sessão avisa em `chegou` e fica parada esperando a permissão de `liberar`.
+        fn set_gate_sessao(&self, chegou: mpsc::Sender<()>, liberar: mpsc::Receiver<()>) {
+            *self.gate_sessao_chegou.lock().unwrap() = Some(chegou);
+            *self.gate_sessao_liberar.lock().unwrap() = Some(liberar);
+        }
+
+        /// Estaciona a escrita de sessão dentro da porta, se houver uma posta.
+        fn wait_gate_sessao(&self) {
+            let chegou = self.gate_sessao_chegou.lock().unwrap().take();
+            let liberar = self.gate_sessao_liberar.lock().unwrap().take();
+            let (Some(chegou), Some(liberar)) = (chegou, liberar) else {
+                return;
+            };
+            let _ = chegou.send(());
+            let _ = liberar.recv();
+        }
     }
 
     impl EndpointControl for FakeCtl {
@@ -1098,6 +1126,9 @@ mod tests {
             self.record(CtlCall::SetSessionVolume(pid, flow, v))
         }
         fn set_session_muted(&self, pid: u32, flow: Flow, m: bool) -> Result<(), AudioError> {
+            // A porta de teste segura a escrita aqui, com a trava `apply` do chamador
+            // ainda na mão: é o ponto exato em que a exclusão mútua pode ser provada.
+            self.wait_gate_sessao();
             self.record(CtlCall::SetSessionMuted(pid, flow, m))?;
             if self.gone_sessions.lock().unwrap().contains(&pid) {
                 return Err(AudioError::Gone);
@@ -3117,5 +3148,224 @@ mod tests {
             world.ctl.calls(),
             vec![CtlCall::SetSessionMuted(10, Flow::Render, true)]
         );
+    }
+
+    // ---------- mudo de app: `changed` honesto ----------
+
+    #[test]
+    fn app_mute_reports_no_change_when_the_only_session_to_change_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let mut ja_mudo = session(11, "discord.exe", Flow::Render, "fone");
+        ja_mudo.muted = true;
+        world.source.set_sessions(vec![
+            session(10, "discord.exe", Flow::Render, "fone"),
+            ja_mudo,
+        ]);
+        // A sessão que precisava mudar já sumiu do Windows.
+        world.ctl.gone_session(10);
+        let before = world.notes();
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        // Nada mudou de fato: a escrita falhou e a outra sessão já estava no estado pedido.
+        assert!(!result.changed, "a ação mudou o estado sem mudar nada");
+        // A única sessão que precisava mudar estava morta: isso é erro, não no-op.
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::DeviceGone));
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // A sessão 11 já estava no estado pedido: ela nem entra no alvo, nem é escrita.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetSessionMuted(10, Flow::Render, true)]
+        );
+        // Nada mudou: ninguém é avisado.
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn app_mute_skips_sessions_already_in_the_requested_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let mut ja_mudo = session(10, "discord.exe", Flow::Render, "fone");
+        ja_mudo.muted = true;
+        world
+            .source
+            .set_sessions(vec![ja_mudo, session(11, "discord.exe", Flow::Render, "fone")]);
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(result.ok);
+        assert!(result.changed);
+        // A sessão 10 já estava muda: reescrevê-la seria desperdício.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetSessionMuted(11, Flow::Render, true)]
+        );
+    }
+
+    #[test]
+    fn app_mute_without_change_does_not_refresh_or_notify() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        let mut ja_mudo = session(10, "discord.exe", Flow::Render, "fone");
+        ja_mudo.muted = true;
+        world.source.set_sessions(vec![ja_mudo]);
+        let before = world.notes();
+        let device_reads_before = world.source.device_reads();
+        let session_reads_before = world.source.session_reads();
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(result.ok);
+        assert!(!result.changed);
+        assert_eq!(result.resolved.as_deref(), Some("discord.exe"));
+        // Já estava do jeito pedido: nenhuma escrita.
+        assert!(world.ctl.calls().is_empty());
+        // Nenhuma releitura completa do sistema: só a leitura de sessões da própria ação.
+        assert_eq!(world.source.device_reads(), device_reads_before);
+        assert_eq!(world.source.session_reads(), session_reads_before + 1);
+        // Nenhum notificador: nada mudou, ninguém precisa saber.
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn app_mute_write_failure_other_than_gone_returns_os_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(10, "discord.exe", Flow::Render, "fone")]);
+        engine.refresh();
+        let state_before = engine.state();
+        let gen_before = engine.lock().generation;
+        let before = world.notes();
+        // A leitura das sessões funciona; a escrita é que o Windows recusa.
+        // Ligado depois do refresh, para o refresh não ser o que falha.
+        world.ctl.fail_writes.store(true, Ordering::SeqCst);
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, Some(ErrorCode::OsError));
+        assert!(!result.changed);
+        let message = result.message.expect("falha precisa de mensagem");
+        assert!(!message.contains("0x"), "mensagem com hexadecimal: {message}");
+        // A escrita foi tentada e falhou: o estado da sessão fica como estava.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetSessionMuted(10, Flow::Render, true)]
+        );
+        assert_eq!(
+            engine.state().sessions[0].muted,
+            state_before.sessions[0].muted
+        );
+        // A geração não sobe: nada mudou, então nenhum cache de leitura é invalidado.
+        assert_eq!(engine.lock().generation, gen_before);
+        assert_eq!(world.notes(), before);
+    }
+
+    #[test]
+    fn app_mute_emits_a_single_state_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world
+            .source
+            .set_devices(vec![device("fone", Flow::Render, true, "Fone")]);
+        world
+            .source
+            .set_sessions(vec![session(10, "discord.exe", Flow::Render, "fone")]);
+        engine.refresh();
+        let before = world.notes();
+
+        let result = engine.act_app_mute("discord.exe", true);
+
+        assert!(result.ok);
+        assert!(result.changed);
+        // Exatamente um aviso: o do `refresh()` da ação. Nem um `emit()` a mais, nem dois
+        // refreshes.
+        assert_eq!(world.notes(), before + 1);
+    }
+
+    #[test]
+    fn app_mute_holds_apply_while_writing_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = Arc::new(world.engine_at(dir.path()));
+        world
+            .source
+            .set_sessions(vec![session(10, "discord.exe", Flow::Render, "fone")]);
+
+        // Porta do backend: a ação estaciona dentro de `set_session_muted()`, ou seja, parada
+        // com a trava `apply` na mão. Nada de janela de tempo: a prova é a posse da trava.
+        let (chegou_tx, chegou_rx) = mpsc::channel();
+        let (liberar_tx, liberar_rx) = mpsc::channel();
+        world.ctl.set_gate_sessao(chegou_tx, liberar_rx);
+
+        let (tx, rx) = mpsc::channel();
+        let worker = Arc::clone(&engine);
+        let handle = std::thread::spawn(move || {
+            let _ = tx.send(worker.act_app_mute("discord.exe", true));
+        });
+
+        // Espera positiva: se a ação não chegar no backend, o teste falha alto em vez de
+        // passar calado por falta de prova.
+        chegou_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a ação não chegou no backend");
+
+        // A escrita está em curso: a ação tem que estar segurando `apply`.
+        assert!(
+            engine.apply.try_lock().is_err(),
+            "a ação não segurou `apply` enquanto escrevia a sessão"
+        );
+
+        // Um `refresh()` concorrente não passa enquanto a escrita está em curso.
+        let releitura_pronta = Arc::new(AtomicBool::new(false));
+        let flag = releitura_pronta.clone();
+        let outro = Arc::clone(&engine);
+        let devices_before = world.source.device_reads();
+        let releitura = std::thread::spawn(move || {
+            outro.refresh();
+            flag.store(true, Ordering::SeqCst);
+        });
+        // A releitura lê o sistema antes de pedir `apply`: quando a contagem de leitura de
+        // dispositivos subir, ela já está em curso e esperando a trava.
+        let prazo = std::time::Instant::now() + Duration::from_secs(5);
+        while world.source.device_reads() == devices_before {
+            assert!(
+                std::time::Instant::now() < prazo,
+                "a releitura concorrente não começou"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            !releitura_pronta.load(Ordering::SeqCst),
+            "o refresh passou enquanto a escrita ainda estava em curso"
+        );
+
+        // Libera a escrita: a ação termina. O `refresh()` dela fica fora do escopo da trava
+        // — se ficasse dentro, esta espera estouraria.
+        liberar_tx
+            .send(())
+            .expect("a porta de teste já estava fechada");
+        let result = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a ação não terminou depois de a porta ser liberada");
+        handle.join().unwrap();
+        releitura.join().unwrap();
+
+        assert!(result.ok);
+        assert!(result.changed);
+        assert!(releitura_pronta.load(Ordering::SeqCst));
     }
 }
