@@ -72,6 +72,20 @@ fn estado() -> std::sync::MutexGuard<'static, Estado> {
     ESTADO.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Trava das operações de configuração de atalhos (`save_settings`, `save_bindings` e a
+/// abertura do app): "ler o que está registrado → registrar no Windows → gravar → guardar o
+/// resultado" é uma operação só. Sem ela, duas gravações concorrentes leem o mesmo estado,
+/// registram a mesma tecla duas vezes e a segunda é recusada pelo Windows.
+///
+/// É a trava **mais externa**: o `Engine` nunca a adquire, então ela pode envolver as
+/// chamadas a `engine.save_settings` sem risco de deadlock.
+static APLICACAO: Mutex<()> = Mutex::new(());
+
+/// Adquire a trava de configuração de atalhos até o fim do escopo.
+pub fn trava_de_aplicacao() -> std::sync::MutexGuard<'static, ()> {
+    APLICACAO.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Os bindings efetivamente registrados agora.
 pub fn registrados() -> Vec<Binding> {
     estado().registrados.clone()
@@ -235,6 +249,7 @@ pub fn espelho_do_painel(lista: &[Binding]) -> String {
 
 /// Registra os atalhos salvos na abertura do app e publica o estado de cada um.
 pub fn apply_at_startup(app: &AppHandle, settings: &Settings) {
+    let _trava = trava_de_aplicacao();
     let (status, registrados) = apply_bindings(&shell::registrador(app), &[], &settings.bindings);
     for (binding, estado) in settings.bindings.iter().zip(status.iter()) {
         if let BindingStatus::Unavailable { message: frase } = estado {

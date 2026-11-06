@@ -241,15 +241,30 @@ fn aplicar_lista(
     })
 }
 
-/// Guarda o resultado do registro e avisa o painel do estado de cada binding.
-fn publica_bindings(
-    app: &AppHandle,
-    registrados: Vec<Binding>,
-    status: Vec<BindingStatusEntry>,
-) -> Vec<BindingStatusEntry> {
+/// O miolo comum de `save_settings` e `save_bindings`: ler o estado atual, validar,
+/// registrar no Windows, gravar e guardar o resultado — tudo como **uma** operação.
+///
+/// `preparar` recebe as configurações atuais e devolve a lista nova e o autostart. Ele roda
+/// dentro da operação, por isso o que ele lê não fica velho.
+fn gravar_atalhos(
+    registrar: &dyn ShortcutRegistrar,
+    engine: &Engine,
+    preparar: impl FnOnce(&Settings) -> Result<(Vec<Binding>, bool), String>,
+    avisar: &dyn Fn(&[BindingStatusEntry]),
+) -> Result<Vec<BindingStatusEntry>, String> {
+    // Primeiro a trava, depois a leitura do estado: o que `preparar` lê não fica velho.
+    let _trava = hotkeys::trava_de_aplicacao();
+    let anterior = engine.settings();
+    let (lista, autostart) = preparar(&anterior)?;
+    let Aplicacao {
+        settings,
+        status,
+        registrados,
+    } = aplicar_lista(registrar, &hotkeys::registrados(), lista, autostart)?;
+    engine.save_settings(settings);
     hotkeys::definir(registrados, status.clone());
-    let _ = app.emit(hotkeys::BINDINGS_STATUS, &status);
-    status
+    avisar(&status);
+    Ok(status)
 }
 
 /// Aplica atalho e "Iniciar com o Windows" antes de gravar. Falha devolve a frase para a tela
@@ -264,25 +279,25 @@ pub fn save_settings(
     engine: Eng<'_>,
     settings: SettingsPayload,
 ) -> Result<(), String> {
-    let anterior = engine.settings();
-    let lista = lista_efetiva(&anterior, &settings);
-    let autostart = settings.autostart.unwrap_or(anterior.autostart);
-    // "Iniciar com o Windows" vem antes dos atalhos: se ele falhar, nenhum atalho muda.
-    shell::set_autostart(autostart)?;
-    let aplicacao = aplicar_lista(
+    gravar_atalhos(
         &shell::registrador(&app),
-        &hotkeys::registrados(),
-        lista,
-        autostart,
-    )?;
-    let Aplicacao {
-        settings,
-        status,
-        registrados,
-    } = aplicacao;
-    engine.save_settings(settings);
-    publica_bindings(&app, registrados, status);
-    Ok(())
+        &engine,
+        |anterior| {
+            let lista = lista_efetiva(anterior, &settings);
+            // A lista é validada **antes** de mexer no registro do Windows: uma lista
+            // recusada não pode deixar o "Iniciar com o Windows" alterado para trás (M3).
+            if let Err((_, erro)) = bindings::validate_bindings(&lista) {
+                return Err(erro.message().to_string());
+            }
+            let autostart = settings.autostart.unwrap_or(anterior.autostart);
+            shell::set_autostart(autostart)?;
+            Ok((lista, autostart))
+        },
+        &|status| {
+            let _ = app.emit(hotkeys::BINDINGS_STATUS, status);
+        },
+    )
+    .map(|_| ())
 }
 
 /// Grava a lista inteira de atalhos: valida, registra e só então persiste.
@@ -296,20 +311,14 @@ pub fn save_bindings(
     engine: Eng<'_>,
     bindings: Vec<Binding>,
 ) -> Result<Vec<BindingStatusEntry>, String> {
-    let anterior = engine.settings();
-    let aplicacao = aplicar_lista(
+    gravar_atalhos(
         &shell::registrador(&app),
-        &hotkeys::registrados(),
-        bindings,
-        anterior.autostart,
-    )?;
-    let Aplicacao {
-        settings,
-        status,
-        registrados,
-    } = aplicacao;
-    engine.save_settings(settings);
-    Ok(publica_bindings(&app, registrados, status))
+        &engine,
+        |anterior| Ok((bindings, anterior.autostart)),
+        &|status| {
+            let _ = app.emit(hotkeys::BINDINGS_STATUS, status);
+        },
+    )
 }
 
 /// O estado de registro de cada binding: uma entrada por binding, na ordem da lista.
@@ -400,6 +409,91 @@ mod tests {
             autostart: false,
             bindings,
         }
+    }
+
+    // ---------- gravações de atalhos não se misturam (I3) ----------
+
+    /// Registro que age como o Windows: registrar duas vezes a mesma tecla é recusado. A
+    /// demora no `register` alarga a janela da corrida.
+    #[derive(Default)]
+    struct WindowsFalso {
+        teclas: std::sync::Mutex<Vec<String>>,
+    }
+
+    struct VistaDoWindows(Arc<WindowsFalso>);
+
+    impl ShortcutRegistrar for VistaDoWindows {
+        fn register(&self, accelerator: &str) -> Result<(), String> {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let mut teclas = self.0.teclas.lock().unwrap();
+            if teclas.iter().any(|t| t == accelerator) {
+                return Err("Outro programa pode estar usando essa combinação.".to_string());
+            }
+            teclas.push(accelerator.to_string());
+            Ok(())
+        }
+
+        fn unregister(&self, accelerator: &str) {
+            self.0.teclas.lock().unwrap().retain(|t| t != accelerator);
+        }
+    }
+
+    #[test]
+    fn concurrent_saves_of_the_same_list_do_not_desync_the_registry_and_the_handler_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(motor(dir.path()));
+        hotkeys::definir(Vec::new(), Vec::new());
+        let windows = Arc::new(WindowsFalso::default());
+        let lista = vec![binding("Ctrl+Alt+1", Action::TogglePanel)];
+
+        // O duplo clique em "Sugerir atalhos de perfil": duas gravações da mesma lista.
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let engine = engine.clone();
+                let windows = windows.clone();
+                let lista = lista.clone();
+                std::thread::spawn(move || {
+                    gravar_atalhos(
+                        &VistaDoWindows(windows),
+                        &engine,
+                        |anterior| Ok((lista, anterior.autostart)),
+                        &|_| {},
+                    )
+                })
+            })
+            .collect();
+        let resultados: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+        for resultado in &resultados {
+            let status = resultado.as_ref().expect("a gravação foi aceita");
+            assert_eq!(
+                status[0].status,
+                BindingStatus::Active,
+                "a segunda gravação viu a tecla como livre e foi recusada: {status:?}"
+            );
+        }
+        // A tabela do handler tem a tecla que está registrada no Windows.
+        assert_eq!(hotkeys::registrados(), lista);
+        assert_eq!(*windows.teclas.lock().unwrap(), vec!["Ctrl+Alt+1".to_string()]);
+    }
+
+    #[test]
+    fn a_rejected_list_is_validated_before_anything_else_moves() {
+        // M3: `preparar` roda antes de qualquer registro; um erro dele não registra nada.
+        let dir = tempfile::tempdir().unwrap();
+        let engine = motor(dir.path());
+        let registrador = FakeRegistrar::default();
+
+        let erro = gravar_atalhos(
+            &registrador,
+            &engine,
+            |_| Err("Esse atalho já está em uso.".to_string()),
+            &|_| {},
+        )
+        .unwrap_err();
+
+        assert_eq!(erro, "Esse atalho já está em uso.");
+        assert!(registrador.calls.borrow().is_empty());
     }
 
     // ---------- o payload de `save_settings` (Ruling 14) ----------
