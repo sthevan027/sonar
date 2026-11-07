@@ -56,6 +56,18 @@ impl Store {
         read_versioned_document(&self.path(name, ".json.bak")).unwrap_or((0, T::default()))
     }
 
+    /// Guarda uma cópia do arquivo atual em `<name>.<rotulo>.bak`, **sem rotação**: se a
+    /// cópia já existe, fica como está. É o que mantém o original de antes de uma migração
+    /// (o `.bak` comum é trocado a cada gravação). Sem arquivo, não faz nada.
+    pub fn preserve_original(&self, name: &str, rotulo: &str) -> io::Result<()> {
+        let main = self.path(name, ".json");
+        let copia = self.path(name, &format!(".{rotulo}.bak"));
+        if main.exists() && !copia.exists() {
+            fs::copy(&main, &copia)?;
+        }
+        Ok(())
+    }
+
     pub fn save<T: Serialize>(&self, name: &str, value: &T) -> io::Result<()> {
         fs::create_dir_all(&self.dir)?;
         let bytes = serde_json::to_vec_pretty(&Envelope {
@@ -119,6 +131,27 @@ mod tests {
         store.save("config", &sample(7, "abc")).unwrap();
         let loaded: Sample = store.load("config");
         assert_eq!(loaded, sample(7, "abc"));
+    }
+
+    #[test]
+    fn preserve_original_keeps_the_first_copy_across_saves() {
+        // M4: o `.bak` comum é trocado a cada gravação; a cópia da migração não.
+        let (dir, store) = open_temp();
+        store.save("config", &sample(1, "original")).unwrap();
+        store.preserve_original("config", "v1").unwrap();
+        store.save("config", &sample(2, "migrado")).unwrap();
+        store.save("config", &sample(3, "depois")).unwrap();
+        store.preserve_original("config", "v1").unwrap();
+
+        let copia = fs::read_to_string(dir.path().join("config.v1.bak")).unwrap();
+        assert!(copia.contains("original"), "{copia}");
+    }
+
+    #[test]
+    fn preserve_original_without_a_file_is_a_noop() {
+        let (dir, store) = open_temp();
+        store.preserve_original("config", "v1").unwrap();
+        assert!(!dir.path().join("config.v1.bak").exists());
     }
 
     #[test]

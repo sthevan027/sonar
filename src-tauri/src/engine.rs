@@ -159,6 +159,14 @@ impl Engine {
             settings.shortcut = espelho_do_painel(&settings.bindings);
         }
         let save_error = if migrou {
+            // O original de antes da migração fica em `settings.v<N>.bak`, sem rotação
+            // (o `.bak` comum só guarda a gravação anterior). Falha aqui não impede o app
+            // de abrir, mas fica registrada.
+            if version > 0 {
+                if let Err(erro) = store.preserve_original("settings", &format!("v{version}")) {
+                    eprintln!("sonar: não foi possível guardar o original das configurações: {erro}");
+                }
+            }
             write_document(&store, "settings", &settings)
         } else {
             None
@@ -667,8 +675,12 @@ impl Engine {
             );
         };
         let key = exe_key(request);
-        // A normalização vem antes de resolver o id: só o rótulo vira `None`.
-        let device = device.filter(|d| !is_default_label(d)).map(DeviceId);
+        // A normalização vem antes de resolver o id: o rótulo e o texto em branco viram
+        // `None` (voltar ao padrão). Um id vazio gravaria uma regra que só seria descartada
+        // na próxima carga (M6).
+        let device = device
+            .filter(|d| !d.trim().is_empty() && !is_default_label(d))
+            .map(DeviceId);
         // O veredito é o desta rodada, não o latch global `routing_available` (Ruling 37,
         // SPEC §3): uma falha antiga não pode reprovar uma ação que nem tentou rotear.
         let RouteReport { changed, unsupported } = {
@@ -700,6 +712,11 @@ impl Engine {
     /// primeiro e `Prev` ao último.
     ///
     /// Não segura `apply`: a ativação adquire a trava por conta própria.
+    ///
+    /// **Limite conhecido (M5):** o cursor é lido sob `inner` e a ativação acontece depois.
+    /// Um atalho e um IPC simultâneos podem escolher o mesmo perfil. Na prática a fila de
+    /// ações tem um worker só, então só o IPC concorrente com outro IPC cai nisso; é
+    /// aceitável na v1.1 e não vale uma trava a mais.
     pub fn act_cycle_profile(&self, dir: Direction) -> ActionResult {
         let target = {
             let inner = self.lock();
@@ -3442,6 +3459,23 @@ mod tests {
     }
 
     #[test]
+    fn move_app_with_a_blank_device_goes_back_to_the_default() {
+        // M6: `""` não grava uma regra com id vazio; vale como "Padrão".
+        let dir = tempfile::tempdir().unwrap();
+        let (_world, engine) = move_app_setup(dir.path());
+
+        for em_branco in ["", "   "] {
+            let result = engine.act_move_app("chrome.exe", Some(em_branco.to_string()));
+            assert!(result.ok, "{result:?}");
+            assert!(
+                engine.state().rules.iter().all(|r| !r.device.0.trim().is_empty()),
+                "regra com id vazio: {:?}",
+                engine.state().rules
+            );
+        }
+    }
+
+    #[test]
     fn move_app_stores_rule_for_absent_device() {
         let dir = tempfile::tempdir().unwrap();
         let (world, engine) = move_app_setup(dir.path());
@@ -3709,7 +3743,7 @@ mod tests {
         // O ciclo não tem para onde avançar: `failed` com `changed` falso (Ruling 17).
         assert!(!result.ok);
         assert!(!result.changed);
-        assert!(result.error_code.is_some());
+        assert_eq!(result.error_code, Some(ErrorCode::NoProfiles));
         assert!(result.message.is_some());
     }
 
@@ -3934,7 +3968,7 @@ mod tests {
             assert_eq!(result.resolved, None);
             assert_eq!(
                 result.message.as_deref(),
-                Some("Ação ainda não disponível.")
+                Some("Alternar o painel não é feito pelo motor de áudio.")
             );
         }
 
@@ -4427,6 +4461,9 @@ mod tests {
         // O arquivo da v1 ficou no `.bak`.
         let bak = std::fs::read_to_string(dir.path().join("settings.json.bak")).unwrap();
         assert_eq!(bak, v1);
+        // M4: e também numa cópia que as próximas gravações não trocam.
+        let original = std::fs::read_to_string(dir.path().join("settings.v1.bak")).unwrap();
+        assert_eq!(original, v1);
     }
 
     #[test]
@@ -4653,6 +4690,94 @@ mod tests {
             direction: Direction::Next,
         });
         assert!(r.ok && r.changed, "{r:?}");
+    }
+
+    /// Sobe o caminho do atalho com o painel sob controle do teste e devolve o dispatcher e
+    /// a fila dos resultados publicados.
+    fn dispatcher_with_panel(
+        engine: Arc<Engine>,
+        painel: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> (crate::dispatcher::Dispatcher, mpsc::Receiver<ActionResult>) {
+        use crate::action_runtime::AppExecutor;
+        use crate::dispatcher::Dispatcher;
+
+        let (tx, rx) = mpsc::channel::<ActionResult>();
+        let tx = Mutex::new(tx);
+        let dispatcher = Dispatcher::spawn_default(
+            Arc::new(AppExecutor::com_painel(engine, painel)),
+            Arc::new(move |_acao: &Action, resultado: &ActionResult| {
+                let _ = tx.lock().unwrap().send(resultado.clone());
+            }),
+        );
+        (dispatcher, rx)
+    }
+
+    #[test]
+    fn parity_toggle_panel_is_done_by_the_app_executor_not_the_engine() {
+        // M8: `TogglePanel` é o caso em que o `Engine` e o caminho do atalho DIVERGEM de
+        // propósito: o motor recusa, o `AppExecutor` cumpre e conta o efeito no painel.
+        let dir = tempfile::tempdir().unwrap();
+        let (_world, engine) = parity_engine(dir.path());
+        let engine = Arc::new(engine);
+        let alternadas = Arc::new(AtomicUsize::new(0));
+        let contador = alternadas.clone();
+
+        let pelo_motor = engine.execute(Action::TogglePanel);
+        assert_eq!(pelo_motor.error_code, Some(ErrorCode::Unsupported));
+
+        let (dispatcher, rx) = dispatcher_with_panel(engine, move || {
+            contador.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        dispatcher.submit(Action::TogglePanel).expect("fila com espaço");
+        let pelo_atalho = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("o worker não publicou o resultado");
+
+        assert!(pelo_atalho.ok && pelo_atalho.changed, "{pelo_atalho:?}");
+        assert_eq!(alternadas.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn parity_burst_of_volume_steps_is_coalesced_by_the_shortcut_but_not_by_ipc() {
+        // M8: onde atalho e IPC divergem. Três passos seguidos pelo IPC são três escritas;
+        // pelo atalho, a rajada vira uma só — e o volume final é o mesmo.
+        let ultimo_volume = |ctl: &FakeCtl| {
+            ctl.calls()
+                .into_iter()
+                .filter_map(|c| match c {
+                    CtlCall::SetVolume(_, v) => Some(v),
+                    _ => None,
+                })
+                .collect::<Vec<f32>>()
+        };
+        let passo = || Action::StepOutputVolume { delta: 0.05 };
+
+        let dir_a = tempfile::tempdir().unwrap();
+        let (world_a, ipc) = parity_engine(dir_a.path());
+        for _ in 0..3 {
+            assert!(ipc.execute(passo()).ok);
+        }
+        let escritas_ipc = ultimo_volume(&world_a.ctl);
+
+        let dir_b = tempfile::tempdir().unwrap();
+        let (world_b, atalho) = parity_engine(dir_b.path());
+        let (dispatcher, rx) = dispatcher_with_panel(Arc::new(atalho), || true);
+        for _ in 0..3 {
+            dispatcher.submit(passo()).expect("fila com espaço");
+        }
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("o worker não publicou o resultado");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "a rajada rendeu mais de uma execução"
+        );
+        let escritas_atalho = ultimo_volume(&world_b.ctl);
+
+        assert_eq!(escritas_ipc.len(), 3, "o IPC não coalesce: {escritas_ipc:?}");
+        assert_eq!(escritas_atalho.len(), 1, "o atalho coalesce: {escritas_atalho:?}");
+        let (a, b) = (*escritas_ipc.last().unwrap(), escritas_atalho[0]);
+        assert!((a - b).abs() < 1e-4, "volume final diferente: {a} x {b}");
     }
 
     #[test]

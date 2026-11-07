@@ -2,7 +2,7 @@
 //!
 //! O app guarda uma lista de bindings (combinação → ação) e registra cada um deles no
 //! Windows. O que o Windows recusa fica **indisponível**: um atalho que falha não impede
-//! os outros de valarem (RF-17).
+//! os outros de valerem (RF-17).
 //!
 //! A forma do JSON é a fixa da Ruling 41 — uma entrada por binding, na ordem da lista:
 //!
@@ -108,6 +108,11 @@ pub fn definir(registrados: Vec<Binding>, status: Vec<BindingStatusEntry>) {
 /// A lista de status tem sempre **uma entrada por binding** e na mesma ordem: é o que o
 /// painel espera para casar status × binding (Ruling 41).
 pub fn entradas(lista: &[Binding], status: &[BindingStatus]) -> Vec<BindingStatusEntry> {
+    debug_assert_eq!(
+        lista.len(),
+        status.len(),
+        "uma entrada de status por binding (Ruling 41)"
+    );
     lista
         .iter()
         .enumerate()
@@ -137,29 +142,63 @@ pub fn apply_bindings(
     atual: &[Binding],
     proxima: &[Binding],
 ) -> (Vec<BindingStatus>, Vec<Binding>) {
+    let resultado = apply_bindings_detalhado(registrar, atual, proxima);
+    (resultado.status, resultado.registrados)
+}
+
+/// O resultado de [`apply_bindings_detalhado`].
+pub struct ResultadoDoRegistro {
+    /// O estado de cada binding da lista nova, na mesma ordem.
+    pub status: Vec<BindingStatus>,
+    /// A lista que ficou efetivamente registrada.
+    pub registrados: Vec<Binding>,
+    /// A lista a **gravar**, com o mesmo tamanho e a mesma ordem da lista nova: onde a troca
+    /// foi recusada, volta o acelerador antigo (que continua valendo), e não o recusado (M1).
+    pub persistir: Vec<Binding>,
+}
+
+/// Igual a [`apply_bindings`], mas também devolve a lista a gravar.
+pub fn apply_bindings_detalhado(
+    registrar: &dyn ShortcutRegistrar,
+    atual: &[Binding],
+    proxima: &[Binding],
+) -> ResultadoDoRegistro {
     let mut status: Vec<BindingStatus> = Vec::with_capacity(proxima.len());
     let mut registrados: Vec<Binding> = Vec::with_capacity(proxima.len());
+    let mut persistir: Vec<Binding> = Vec::with_capacity(proxima.len());
     // Os aceleradores que a troca já soltou (o antigo sai depois do novo entrar).
     let mut soltos: Vec<String> = Vec::new();
+    // Os antigos que alguma entrada desta passada já usou como base de troca (M2): cada
+    // um serve a uma entrada só, senão a segunda troca soltaria um atalho que a primeira
+    // manteve.
+    let mut usados: Vec<String> = Vec::new();
 
     for binding in proxima {
-        // A mesma tecla, escrita de outro jeito: já está registrada, não se mexe.
-        if atual
-            .iter()
-            .any(|antigo| mesma_tecla(&antigo.accelerator, &binding.accelerator))
-        {
+        // A mesma tecla, escrita de outro jeito: já está registrada, não se mexe — a menos
+        // que esta passada já a tenha soltado (M2).
+        if atual.iter().any(|antigo| {
+            mesma_tecla(&antigo.accelerator, &binding.accelerator)
+                && !soltos.iter().any(|solto| mesma_tecla(solto, &antigo.accelerator))
+        }) {
             status.push(BindingStatus::Active);
             registrados.push(binding.clone());
+            persistir.push(binding.clone());
             continue;
         }
 
         // Troca: o atalho antigo da mesma ação é solto depois do novo entrar.
         let troca = atual.iter().find(|antigo| {
             antigo.action == binding.action
+                && !usados
+                    .iter()
+                    .any(|usado| mesma_tecla(usado, &antigo.accelerator))
                 && !proxima
                     .iter()
                     .any(|outro| mesma_tecla(&outro.accelerator, &antigo.accelerator))
         });
+        if let Some(antigo) = troca {
+            usados.push(antigo.accelerator.clone());
+        }
 
         match troca {
             Some(antigo) => match shell::switch_shortcut(
@@ -171,20 +210,25 @@ pub fn apply_bindings(
                     soltos.push(antigo.accelerator.clone());
                     status.push(BindingStatus::Active);
                     registrados.push(binding.clone());
+                    persistir.push(binding.clone());
                 }
                 Err(frase) => {
-                    // O novo não entrou: o antigo continua valendo (e não é solto).
+                    // O novo não entrou: o antigo continua valendo (e não é solto), e é
+                    // ele que vai para o disco (M1).
                     status.push(BindingStatus::Unavailable { message: frase });
                     registrados.push(antigo.clone());
+                    persistir.push(antigo.clone());
                 }
             },
             None => match registrar.register(&binding.accelerator) {
                 Ok(()) => {
                     status.push(BindingStatus::Active);
                     registrados.push(binding.clone());
+                    persistir.push(binding.clone());
                 }
                 Err(frase) => {
                     status.push(BindingStatus::Unavailable { message: frase });
+                    persistir.push(binding.clone());
                 }
             },
         }
@@ -213,7 +257,11 @@ pub fn apply_bindings(
         registrar.unregister(&antigo.accelerator);
     }
 
-    (status, registrados)
+    ResultadoDoRegistro {
+        status,
+        registrados,
+        persistir,
+    }
 }
 
 /// Ajusta o atalho legado no binding `toggle_panel`.
@@ -416,6 +464,87 @@ mod tests {
             !calls.iter().any(|c| c.contains("unregister")),
             "o atalho anterior não pode ser solto: {calls:?}"
         );
+    }
+
+    #[test]
+    fn failed_swap_persists_the_previous_accelerator() {
+        // M1: o que vai para o disco é o acelerador que continua valendo, não o recusado.
+        let registrar = FakeRegistrar::default();
+        let antes = vec![binding("Ctrl+Alt+K", Action::TogglePanel)];
+
+        let resultado = apply_bindings_detalhado(
+            &registrar,
+            &antes,
+            &[binding(OCUPADO, Action::TogglePanel)],
+        );
+
+        assert_eq!(resultado.persistir, antes, "grava o antigo, não o recusado");
+        assert_eq!(resultado.persistir.len(), resultado.status.len());
+    }
+
+    #[test]
+    fn failed_new_binding_without_previous_is_still_persisted() {
+        // Sem antigo para voltar, o recusado continua na lista (a tela mostra o motivo).
+        let registrar = FakeRegistrar::default();
+        let nova = vec![binding(OCUPADO, Action::TogglePanel)];
+
+        let resultado = apply_bindings_detalhado(&registrar, &[], &nova);
+
+        assert_eq!(resultado.persistir, nova);
+    }
+
+    #[test]
+    fn two_entries_of_the_same_action_do_not_release_a_kept_accelerator() {
+        // M2: a primeira troca falha e mantém o antigo; a segunda não pode soltá-lo.
+        let registrar = FakeRegistrar::default();
+        let antes = vec![binding("Ctrl+Alt+K", Action::TogglePanel)];
+        let depois = vec![
+            binding(OCUPADO, Action::TogglePanel),
+            binding("Ctrl+Alt+X", Action::TogglePanel),
+        ];
+
+        let resultado = apply_bindings_detalhado(&registrar, &antes, &depois);
+
+        let calls = registrar.calls.borrow().clone();
+        assert!(
+            !calls.iter().any(|c| c == "unregister Ctrl+Alt+K"),
+            "o antigo manteve-se registrado e não pode ser solto: {calls:?}"
+        );
+        assert!(
+            resultado
+                .registrados
+                .iter()
+                .any(|r| r.accelerator == "Ctrl+Alt+K"),
+            "o antigo continua registrado: {:?}",
+            resultado.registrados
+        );
+        assert!(
+            resultado
+                .registrados
+                .iter()
+                .any(|r| r.accelerator == "Ctrl+Alt+X"),
+            "o segundo entrou por registro novo: {:?}",
+            resultado.registrados
+        );
+    }
+
+    #[test]
+    fn an_accelerator_released_by_a_swap_is_not_treated_as_already_registered() {
+        // M2: se a passada soltou o antigo, uma entrada seguinte com a mesma tecla precisa
+        // registrá-la de novo, e não aparecer como Active sem estar registrada.
+        let registrar = FakeRegistrar::default();
+        let antes = vec![binding("Ctrl+Alt+K", Action::TogglePanel)];
+        let depois = vec![
+            binding("Ctrl+Alt+X", Action::TogglePanel),
+            binding("Ctrl+Alt+K", Action::ToggleOutputMute),
+        ];
+
+        let resultado = apply_bindings_detalhado(&registrar, &antes, &depois);
+
+        // Ctrl+Alt+K está na lista nova, então a troca não a solta: segue registrada.
+        let calls = registrar.calls.borrow().clone();
+        assert!(!calls.iter().any(|c| c == "unregister Ctrl+Alt+K"), "{calls:?}");
+        assert_eq!(resultado.status, vec![BindingStatus::Active, BindingStatus::Active]);
     }
 
     #[test]

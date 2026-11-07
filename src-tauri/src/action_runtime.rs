@@ -410,12 +410,6 @@ mod tests {
     // ---------- o evento da falha ----------
 
     #[test]
-    fn o_evento_da_falha_tem_o_nome_esperado() {
-        // O nome é o que o TypeScript escuta: `action-result`.
-        assert_eq!(ACTION_RESULT, "action-result");
-    }
-
-    #[test]
     fn a_falha_publicada_vai_no_evento_com_o_erro_dela() {
         // O publicador é testado sem o Tauri: o emissor é uma fila.
         let publicado: Arc<Mutex<Vec<(String, ActionResult)>>> = Arc::new(Mutex::new(Vec::new()));

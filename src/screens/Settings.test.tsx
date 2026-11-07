@@ -10,6 +10,7 @@ import type {
   Settings as AppSettings,
 } from "../types";
 import { Bindings } from "./Bindings";
+import { BindingEditor } from "./BindingEditor";
 import { Settings } from "./Settings";
 import { ACTION_CHOICES } from "./bindingsModel";
 import { shortcutFromKeys, shortcutKeys } from "./settingsModel";
@@ -436,5 +437,33 @@ describe("Atalhos globais", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Adicionar atalho" }));
     fireEvent.click(screen.getByRole("button", { name: /Ativar um perfil/ }));
     expect(await screen.findByText("Perfil")).toBeTruthy();
+  });
+});
+
+describe("BindingEditor: erro do backend (M12)", () => {
+  afterEach(cleanup);
+
+  it("avisa que o erro deixou de valer quando a ação muda", () => {
+    const onEdit = vi.fn();
+    render(
+      <BindingEditor
+        initial={{ accelerator: "Ctrl+Alt+K", action: { type: "toggle_panel" } }}
+        others={[]}
+        profiles={[]}
+        devices={[]}
+        error="Não foi possível registrar o atalho."
+        onSave={() => {}}
+        onRemove={() => {}}
+        onCancel={() => {}}
+        onEdit={onEdit}
+      />,
+    );
+    // Abrir a tela não conta como edição.
+    expect(onEdit).not.toHaveBeenCalled();
+
+    const outra = ACTION_CHOICES.find((c) => c.kind !== "toggle_panel")!;
+    fireEvent.click(screen.getByText(outra.label));
+
+    expect(onEdit).toHaveBeenCalled();
   });
 });

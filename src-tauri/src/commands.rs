@@ -227,14 +227,21 @@ fn aplicar_lista(
     if let Err((_, erro)) = bindings::validate_bindings(&lista) {
         return Err(erro.message().to_string());
     }
-    let (status, registrados) = hotkeys::apply_bindings(registrar, atual, &lista);
-    let entradas = hotkeys::entradas(&lista, &status);
-    let espelho = hotkeys::espelho_do_painel(&lista);
+    let hotkeys::ResultadoDoRegistro {
+        status,
+        registrados,
+        persistir,
+    } = hotkeys::apply_bindings_detalhado(registrar, atual, &lista);
+    // O que vai para o disco é o que de fato está valendo: onde a troca foi recusada, o
+    // acelerador antigo (M1). Senão, depois de reiniciar, o antigo sumiria e o novo falharia
+    // de novo.
+    let entradas = hotkeys::entradas(&persistir, &status);
+    let espelho = hotkeys::espelho_do_painel(&persistir);
     Ok(Aplicacao {
         settings: Settings {
             shortcut: espelho,
             autostart,
-            bindings: lista,
+            bindings: persistir,
         },
         status: entradas,
         registrados,
@@ -717,9 +724,11 @@ mod tests {
     // ---------- o IPC usa o mesmo executor do atalho (Ruling 43) ----------
 
     #[test]
-    fn dispatch_action_uses_the_same_executor_as_the_shortcut() {
-        // O `Engine` sozinho não mexe no painel: devolve "não disponível". O executor do
-        // atalho (`AppExecutor`) mexe — e é o que o IPC usa agora.
+    fn app_executor_toggles_the_panel_where_the_engine_cannot() {
+        // O que este teste prova: o `Engine` sozinho recusa `TogglePanel`; o `AppExecutor`
+        // (o mesmo do atalho) o cumpre. `dispatch_action` só monta um `AppExecutor` com o
+        // `AppHandle` e delega — precisa de um app Tauri de verdade, então esse último elo
+        // fica para o teste manual (Ruling 43).
         let dir = tempfile::tempdir().unwrap();
         let engine = motor(dir.path());
         let acao = Action::TogglePanel;

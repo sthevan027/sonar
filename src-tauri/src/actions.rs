@@ -157,11 +157,12 @@ impl ActionExecutor for Engine {
             Action::MoveApp { exe, device } => self.act_move_app(&exe, device),
             Action::CycleProfile { direction } => self.act_cycle_profile(direction),
             Action::CycleDefaultOutput { direction } => self.act_cycle_output(direction),
-            // O painel não é do `Engine`: quem abre a janela é a `AppExecutor` (Task 8).
-            // A Task 20 não implementa ação nenhuma.
-            Action::TogglePanel => {
-                ActionResult::failed(ErrorCode::Unsupported, "Ação ainda não disponível.")
-            }
+            // O painel não é do `Engine`: quem abre a janela é a `AppExecutor`. Pelo motor,
+            // a ação é recusada de propósito.
+            Action::TogglePanel => ActionResult::failed(
+                ErrorCode::Unsupported,
+                "Alternar o painel não é feito pelo motor de áudio.",
+            ),
         }
     }
 }

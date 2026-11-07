@@ -36,6 +36,8 @@ interface BindingEditorProps {
   onSave: (binding: Binding) => void;
   onRemove: () => void;
   onCancel: () => void;
+  /** O usuário mudou a ação ou o atalho: o erro do backend deixou de valer. */
+  onEdit?: () => void;
 }
 
 /** Qual seletor de parâmetro está aberto. */
@@ -55,6 +57,7 @@ export function BindingEditor({
   onSave,
   onRemove,
   onCancel,
+  onEdit,
 }: BindingEditorProps) {
   const [action, setAction] = useState<Action>(initial?.action ?? actionOfKind("toggle_panel"));
   const [accelerator, setAccelerator] = useState<string>(initial?.accelerator ?? "");
@@ -68,6 +71,16 @@ export function BindingEditor({
   useEffect(() => {
     if (capturing) keysRef.current?.focus();
   }, [capturing]);
+
+  // O erro que o backend devolveu era sobre o atalho/ação anteriores: trocou, saiu da tela (M12).
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) {
+      firstRun.current = false;
+      return;
+    }
+    onEdit?.();
+  }, [action, accelerator]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const duplicate = duplicateMessage(accelerator, others);
   const invalid = validateAccelerator(accelerator);

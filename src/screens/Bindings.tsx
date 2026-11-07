@@ -202,6 +202,7 @@ export function Bindings({ onBack }: BindingsProps) {
         profiles={state.profiles}
         devices={state.devices}
         error={editorError}
+        onEdit={() => setEditorError(null)}
         onSave={saveBinding}
         onRemove={() => editor.index !== null && removeBinding(editor.index)}
         onCancel={() => {
@@ -395,10 +396,9 @@ function BindingRow({
           ref={keysRef}
           type="button"
           className="keys-btn"
-          disabled={unavailable}
           aria-label={
             unavailable
-              ? `Atalho indisponível: ${keys.join(" ")}`
+              ? `Atalho indisponível: ${keys.join(" ")}. Toque para trocar.`
               : capturing
                 ? "Digite a combinação do atalho"
                 : `Atalho: ${keys.join(" ")}. Toque para trocar.`

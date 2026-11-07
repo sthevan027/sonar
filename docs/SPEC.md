@@ -89,7 +89,7 @@ Cada requisito tem um teste ou verificação manual indicado.
 | RF-16 | Validação antes de gravar: sintaxe do atalho, duplicata dentro do app recusada, tamanho máximo (proposta: 64 caracteres) | Unitário |
 | RF-17 | Troca falha: o atalho anterior continua valendo e a UI mostra o aviso. Na inicialização, binding que falha fica "indisponível" e os demais seguem | Manual (VERIFICACAO, "Atalho em uso") + unitário |
 | RF-18 | Binding apontando para **perfil apagado** (`profile_not_found`) ou **exe inválido** (`invalid_exe`): a ação devolve erro e o binding é mantido (não é removido sozinho). Dispositivo ausente **não** é erro: a A9 guarda a regra e devolve `ok: true` (§3, A9) | Unitário |
-| RF-19 | Migração: `shortcut` legado vira binding `toggle_panel` na primeira leitura. O arquivo antigo fica em `.bak` | Unitário com arquivo de v1 real (manual) |
+| RF-19 | Migração: `shortcut` legado vira binding `toggle_panel` na primeira leitura. O arquivo antigo fica em `.bak` e numa cópia `settings.v<N>.bak` que as gravações seguintes não trocam. Troca de atalho recusada grava o acelerador antigo (o que continua valendo), não o recusado | Unitário com arquivo de v1 real (manual) |
 | RF-20 | Os comandos IPC atuais (`set_*`) não mudam de contrato. O painel continua igual | Testes atuais + manual da F0 |
 
 ---
