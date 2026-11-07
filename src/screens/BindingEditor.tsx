@@ -5,7 +5,7 @@ import { Slider } from "../components/Slider";
 import type { Action, Binding, DeviceView, Direction, Profile } from "../types";
 import { AppPicker } from "./AppPicker";
 import {
-  ACTION_CHOICES,
+  groupedChoices,
   actionOfKind,
   bindingDetail,
   bindingTitle,
@@ -140,25 +140,30 @@ export function BindingEditor({
         <div className="ed-sec">
           <div className="lbl">Ação</div>
           <div className="picker">
-            <ul className="pick-list" style={{ maxHeight: 132 }}>
-              {ACTION_CHOICES.map((choice) => (
-                <li key={choice.kind}>
-                  <button
-                    type="button"
-                    className={choice.kind === action.type ? "pick on" : "pick"}
-                    onClick={() => selectKind(choice.kind)}
-                  >
-                    <Icon name={choice.icon} size={16} />
-                    <span>{choice.label}</span>
-                    {choice.kind === action.type ? (
-                      <Icon name="check" size={15} />
-                    ) : (
-                      choice.hint && <em className="cnt">{choice.hint}</em>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {groupedChoices().map(({ group, choices }) => (
+              <div key={group} className="pick-group">
+                <div className="pick-group-title">{group}</div>
+                <ul className="pick-list pick-list-all" aria-label={group}>
+                  {choices.map((choice) => (
+                    <li key={choice.kind}>
+                      <button
+                        type="button"
+                        className={choice.kind === action.type ? "pick on" : "pick"}
+                        onClick={() => selectKind(choice.kind)}
+                      >
+                        <Icon name={choice.icon} size={16} />
+                        <span>{choice.label}</span>
+                        {choice.kind === action.type ? (
+                          <Icon name="check" size={15} />
+                        ) : (
+                          choice.hint && <em className="cnt">{choice.hint}</em>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
         </div>
 

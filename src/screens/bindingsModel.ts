@@ -26,13 +26,42 @@ export interface ActionChoice {
   icon: IconName;
   /** Ações de perfil usam o latão na lista. */
   brass: boolean;
+  /** Seção do seletor em que a ação aparece. */
+  group: ActionGroup;
+}
+
+/** As seções do seletor de ação, na ordem em que aparecem. */
+export const ACTION_GROUPS = ["Painel", "Perfis", "Microfone", "Saída de áudio", "Aplicativos"] as const;
+export type ActionGroup = (typeof ACTION_GROUPS)[number];
+
+const GROUP_OF: Record<ActionKind, ActionGroup> = {
+  toggle_panel: "Painel",
+  activate_profile: "Perfis",
+  cycle_profile: "Perfis",
+  toggle_mic_mute: "Microfone",
+  set_mic_mute: "Microfone",
+  toggle_output_mute: "Saída de áudio",
+  set_output_mute: "Saída de áudio",
+  step_output_volume: "Saída de áudio",
+  set_output_volume: "Saída de áudio",
+  cycle_default_output: "Saída de áudio",
+  set_app_mute: "Aplicativos",
+  move_app: "Aplicativos",
+};
+
+/** As ações agrupadas por seção, na ordem de `ACTION_GROUPS` (seção vazia não aparece). */
+export function groupedChoices(): { group: ActionGroup; choices: ActionChoice[] }[] {
+  return ACTION_GROUPS.map((group) => ({
+    group,
+    choices: ACTION_CHOICES.filter((c) => c.group === group),
+  })).filter((g) => g.choices.length > 0);
 }
 
 /**
  * Lista fechada de ações (SPEC §5 do rascunho). O parâmetro de cada uma é escolhido logo
  * abaixo, na seção "Parâmetros" do editor.
  */
-export const ACTION_CHOICES: ActionChoice[] = [
+const RAW_CHOICES: Omit<ActionChoice, "group">[] = [
   {
     kind: "toggle_panel",
     label: "Mostrar ou esconder o painel",
@@ -118,6 +147,11 @@ export const ACTION_CHOICES: ActionChoice[] = [
     brass: false,
   },
 ];
+
+export const ACTION_CHOICES: ActionChoice[] = RAW_CHOICES.map((choice) => ({
+  ...choice,
+  group: GROUP_OF[choice.kind],
+}));
 
 /**
  * Lista de bindings das configurações. `null` quando o Rust ainda não manda o campo (a

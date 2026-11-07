@@ -1046,6 +1046,27 @@ button:focus-visible {
   overflow-y: auto;
 }
 
+/* Seletor de ação: todas as opções à vista, em seções, sem rolagem interna. */
+.pick-list.pick-list-all {
+  max-height: none;
+  overflow: visible;
+}
+
+.pick-group + .pick-group {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.pick-group-title {
+  padding: 0 8px 4px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+  font-weight: 600;
+}
+
 .pick {
   width: 100%;
   height: 40px;
