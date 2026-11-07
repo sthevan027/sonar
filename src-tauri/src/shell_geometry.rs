@@ -24,7 +24,8 @@ pub struct Point {
     pub y: i32,
 }
 
-/// Distância entre o painel e a borda da área de trabalho, em pixels físicos (cerca de 8 px a 100%).
+/// Distância entre o painel e a borda da área de trabalho (a barra de tarefas), em pixels
+/// físicos: 8 px, uma folga pequena que deixa o canto de baixo arredondado à vista.
 const MARGIN: i32 = 8;
 
 impl Rect {
@@ -158,6 +159,22 @@ mod tests {
         assert!(p.y + PANEL.height <= 1040, "painel acima da barra");
         assert!(p.y < tray.y, "painel fica acima do ícone");
         assert!(p.x + PANEL.width <= 1920, "painel dentro da tela");
+    }
+
+    #[test]
+    fn place_near_tray_bottom_taskbar_leaves_a_small_gap_and_is_centred_on_the_icon() {
+        // O painel fica a 8 px da barra e centrado no ícone.
+        let tray = Rect {
+            x: 1000,
+            y: 1050,
+            width: 24,
+            height: 24,
+        };
+
+        let p = place_near_tray(tray, bottom_work_area(), PANEL);
+
+        assert_eq!(p.y + PANEL.height, 1040 - 8, "8 px acima da barra");
+        assert_eq!(p.x + PANEL.width / 2, tray.x + tray.width / 2, "centrado no ícone");
     }
 
     #[test]

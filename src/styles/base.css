@@ -10,6 +10,12 @@
 body {
   font-family: var(--font-text);
   color: var(--text);
+  /* Texto claro sobre fundo escuro: um pouco mais de entrelinha e de trilho, e suavização
+     em tons de cinza para as letras não engrossarem. */
+  line-height: 1.4;
+  letter-spacing: 0.005em;
+  -webkit-font-smoothing: antialiased;
+  font-optical-sizing: auto;
 }
 
 #root {
@@ -37,7 +43,7 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-/* Janela do painel: 388x668 dentro da janela transparente de 420x700. */
+/* Janela do painel: 388x668, do tamanho exato da janela do app (sem margem transparente). */
 .win {
   position: relative;
   width: 388px;
@@ -45,7 +51,8 @@ button:focus-visible {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 18px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  /* Sem sombra: ela era cortada nas bordas da janela transparente e aparecia como uma
+     camada escura retangular atrás do painel. */
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -56,7 +63,7 @@ button:focus-visible {
 .title {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 24px;
+  font-size: var(--fs-title);
   letter-spacing: -0.01em;
 }
 
@@ -66,7 +73,7 @@ button:focus-visible {
 }
 
 .lbl {
-  font-size: 11px;
+  font-size: var(--fs-label);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mute);
@@ -126,7 +133,7 @@ button:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: var(--fs-small);
   font-weight: 600;
   color: var(--mute);
 }
@@ -144,7 +151,7 @@ button:focus-visible {
   height: 30px;
   padding: 0 8px 0 10px;
   border-radius: 9px;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   border: 1px solid;
   flex: 0 1 auto;
@@ -288,7 +295,7 @@ button:focus-visible {
 .pct {
   width: 30px;
   text-align: right;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--mute);
 }
 
@@ -385,7 +392,7 @@ button:focus-visible {
   justify-content: center;
   gap: 12px;
   color: var(--mute);
-  font-size: 13px;
+  font-size: var(--fs-small);
 }
 
 .btn {
@@ -396,7 +403,7 @@ button:focus-visible {
   border: 1px solid var(--line);
   color: var(--text);
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-small);
 }
 
 /* Ícone do app; sem ícone, a inicial num bloco neutro (sem cor de marca). */
@@ -416,7 +423,7 @@ button:focus-visible {
   color: var(--mute);
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-small);
 }
 
 /* ---- Painel (Tasks 11): perfis, abas, listas de apps. Medidas de docs/mockups/A.html e A2.html. ---- */
@@ -449,7 +456,7 @@ button:focus-visible {
 
 .who b {
   display: block;
-  font-size: 14px;
+  font-size: var(--fs-body);
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -458,7 +465,7 @@ button:focus-visible {
 
 .who .o {
   display: block;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--mute);
   white-space: nowrap;
   overflow: hidden;
@@ -466,7 +473,7 @@ button:focus-visible {
 }
 
 .cnt {
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--mute);
   display: inline-flex;
   align-items: center;
@@ -499,7 +506,7 @@ button:focus-visible {
 }
 
 .empty {
-  font-size: 13px;
+  font-size: var(--fs-small);
   line-height: 1.4;
   color: var(--mute);
   padding: 6px 2px;
@@ -511,7 +518,7 @@ button:focus-visible {
   gap: 8px;
   height: 34px;
   padding: 0 4px;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--mute);
   flex: none;
@@ -526,7 +533,7 @@ button:focus-visible {
   display: flex;
   gap: 8px;
   align-items: center;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--mute);
   border-top: 1px solid var(--line);
   padding-top: 11px;
@@ -575,7 +582,7 @@ button:focus-visible {
 .pname b {
   display: block;
   font-family: var(--font-display);
-  font-size: 17px;
+  font-size: var(--fs-heading);
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -584,7 +591,7 @@ button:focus-visible {
 
 .pname span {
   display: block;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--mute);
 }
 
@@ -596,7 +603,7 @@ button:focus-visible {
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1.4;
   flex: none;
 }
@@ -678,7 +685,7 @@ button:focus-visible {
   justify-content: center;
   gap: 9px;
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--fs-small);
   color: var(--live);
   background: rgba(143, 191, 122, 0.12);
   border: 1px solid rgba(143, 191, 122, 0.45);
@@ -723,7 +730,7 @@ button:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--fs-small);
   font-weight: 500;
   text-align: left;
 }
@@ -761,7 +768,7 @@ button:focus-visible {
   background: var(--card);
   border: 1px solid var(--danger-line);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1.4;
 }
 
@@ -809,7 +816,7 @@ button:focus-visible {
 .ed-title {
   flex: 1;
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: var(--fs-heading);
   font-weight: 600;
 }
 
@@ -865,7 +872,7 @@ button:focus-visible {
   border: 1px solid var(--line);
   color: var(--text);
   font: inherit;
-  font-size: 15px;
+  font-size: var(--fs-body);
 }
 
 .ed-input:focus-visible {
@@ -880,7 +887,7 @@ button:focus-visible {
 .ed-count {
   flex: none;
   font-style: normal;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--mute);
 }
 
@@ -890,7 +897,7 @@ button:focus-visible {
 }
 
 .ed-err {
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--danger);
 }
 
@@ -930,7 +937,7 @@ button:focus-visible {
 .ed-appname {
   flex: 1;
   min-width: 0;
-  font-size: 14px;
+  font-size: var(--fs-body);
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -956,14 +963,14 @@ button:focus-visible {
   border-radius: 12px;
   color: var(--mute);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-small);
 }
 
 .ed-note {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1.35;
   color: var(--mute);
 }
@@ -975,7 +982,7 @@ button:focus-visible {
   border: 0;
   color: var(--mute);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-small);
 }
 
 .ed-danger {
@@ -985,7 +992,7 @@ button:focus-visible {
   border: 0;
   color: var(--danger);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-small);
 }
 
 .ed-confirm {
@@ -996,7 +1003,7 @@ button:focus-visible {
   border-radius: 12px;
   border: 1px solid var(--danger-line);
   background: var(--danger-wash);
-  font-size: 13px;
+  font-size: var(--fs-small);
 }
 
 .ed-confirm-actions {
@@ -1033,7 +1040,7 @@ button:focus-visible {
 .picker .btn {
   height: 40px;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   flex: none;
 }
 
@@ -1060,7 +1067,7 @@ button:focus-visible {
 
 .pick-group-title {
   padding: 0 8px 4px;
-  font-size: 11px;
+  font-size: var(--fs-label);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mute);
@@ -1079,7 +1086,7 @@ button:focus-visible {
   border: 0;
   color: var(--text);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--fs-body);
   text-align: left;
 }
 
@@ -1102,7 +1109,7 @@ button:focus-visible {
   align-items: center;
   gap: 6px;
   margin-top: 3px;
-  font-size: 11px;
+  font-size: var(--fs-label);
   color: var(--mute);
 }
 
@@ -1150,7 +1157,7 @@ button:focus-visible {
   align-items: center;
   gap: 6px;
   padding: 2px 0;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--mute);
 }
 
@@ -1221,14 +1228,14 @@ button.it:hover {
 
 .it .tx b {
   display: block;
-  font-size: 14px;
+  font-size: var(--fs-body);
   font-weight: 600;
 }
 
 .it .tx span {
   display: block;
   margin-top: 1px;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--mute);
 }
 
@@ -1260,12 +1267,12 @@ button.it:hover {
   display: grid;
   place-items: center;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
 .keys-hint {
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--brass);
   white-space: nowrap;
 }
@@ -1334,7 +1341,7 @@ button.it:hover {
   border-radius: 8px;
   padding: 7px 11px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 .upd-btn {
@@ -1376,7 +1383,7 @@ button.it:hover {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-text);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1.45;
   color: var(--mute);
 }
@@ -1412,6 +1419,29 @@ button.it:hover {
 .upd-error {
   margin: 8px 12px 10px;
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1.4;
+}
+
+/* ---- Tipografia: ajustes de legibilidade (0.2.1) ---- */
+
+/* Texto secundário em tom apagado e corpo pequeno: um degrau de peso a mais (DM Sans 500)
+   para não afinar no fundo escuro. */
+.it .tx span,
+.pname span,
+.who .o,
+.foot,
+.ed-note,
+.cnt,
+.ed-count,
+.upd-notes {
+  font-weight: 500;
+}
+
+/* Números que mudam (volume, contagens): largura fixa para não tremer ao atualizar. */
+.pct,
+.cnt,
+.ed-count,
+.st {
+  font-variant-numeric: tabular-nums;
 }

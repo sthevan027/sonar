@@ -21,8 +21,8 @@ const TRAY_ID: &str = "main-tray";
 const TRAY_ICON: &[u8] = include_bytes!("../icons/tray.png");
 /// Tamanho do painel em pixels lógicos (igual ao `tauri.conf.json`); em pixels físicos vem
 /// multiplicado pela escala do monitor onde ele abre.
-const PANEL_WIDTH: f64 = 420.0;
-const PANEL_HEIGHT: f64 = 700.0;
+const PANEL_WIDTH: f64 = 388.0;
+const PANEL_HEIGHT: f64 = 668.0;
 const AUTOSTART_VALUE: &str = "Sonar";
 #[cfg(windows)]
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -173,6 +173,22 @@ fn remember_tray_rect(app: &AppHandle, event: &TrayIconEvent) {
     });
 }
 
+/// Onde o ícone da bandeja está agora, em pixels físicos. `None` se o sistema não informar
+/// (ícone escondido no transbordo, por exemplo) ou se vier zerado.
+fn fresh_tray_rect(panel: &WebviewWindow) -> Option<Rect> {
+    let scale = panel.scale_factor().ok().unwrap_or(1.0);
+    let rect = panel.app_handle().tray_by_id(TRAY_ID)?.rect().ok()??;
+    let position = rect.position.to_physical::<i32>(scale);
+    let size = rect.size.to_physical::<u32>(scale);
+    let known = size.width > 0 && size.height > 0 && (position.x, position.y) != (0, 0);
+    known.then(|| Rect {
+        x: position.x,
+        y: position.y,
+        width: size.width as i32,
+        height: size.height as i32,
+    })
+}
+
 /// Mostra e foca o painel. Usado pelo menu "Abrir" e pela segunda execução do app.
 pub fn show_panel(app: &AppHandle) {
     if let Some(panel) = app.get_webview_window(PANEL) {
@@ -236,7 +252,9 @@ fn show(panel: &WebviewWindow) {
 /// Põe o painel perto do ícone da bandeja (último conhecido), dentro da área de trabalho do
 /// monitor onde o ícone está. Sem ícone conhecido: canto inferior direito do monitor principal.
 fn position_panel(panel: &WebviewWindow) {
-    let tray = *locked(&LAST_TRAY);
+    // Primeiro o retângulo que o próprio ícone informa agora (acompanha o ícone mesmo que ele
+    // tenha mudado de lugar); sem ele, o último conhecido por um evento de clique/mouse.
+    let tray = fresh_tray_rect(panel).or(*locked(&LAST_TRAY));
     let monitor = match tray {
         Some(rect) => panel
             .monitor_from_point(

@@ -1,7 +1,7 @@
 {
   "name": "sonar",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "App de bandeja para controlar o áudio por app no Windows",
   "license": "MIT",
   "author": "Sthevan Santos",

@@ -183,6 +183,9 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles, onOpenBindings
         <b className="ed-title">Configurações</b>
       </div>
 
+      {/* O conteúdo rola; o cabeçalho com o botão de voltar fica fixo. Sem isso, o "Sobre"
+          ficava cortado abaixo da janela. */}
+      <div className="ed-scroll">
       <div className="ed-sec">
         <div className="lbl">Geral</div>
         <div className="grp">
@@ -322,6 +325,7 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles, onOpenBindings
       <div className="foot">
         <Icon name="check" size={15} />
         <span>As mudanças são salvas na hora.</span>
+      </div>
       </div>
     </div>
   );
