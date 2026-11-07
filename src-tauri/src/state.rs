@@ -2,16 +2,24 @@
 //! montada pelo `Engine` (`AppState`). Tudo serializável; nada aqui fala com o sistema.
 
 use crate::audio::types::{AudioSession, DeviceId, Flow};
+use crate::bindings::Binding;
 use crate::profiles::Profile;
 use crate::rules::Rule;
 use serde::{Deserialize, Serialize};
 
 /// Configurações do app (`settings.json`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `bindings` é a tabela de atalhos globais (combinação → ação). Ela é **persistida**:
+/// o `settings.json` guarda a lista inteira. O `shortcut` continua existindo como o
+/// atalho legado, que a migração transforma num binding `toggle_panel`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub shortcut: String,
     pub autostart: bool,
+    /// A tabela de atalhos globais. Campo ausente no arquivo = lista vazia: quem decide
+    /// o que preencher é a migração, não o desserializador.
+    pub bindings: Vec<Binding>,
 }
 
 impl Default for Settings {
@@ -19,6 +27,9 @@ impl Default for Settings {
         Settings {
             shortcut: "Super+Alt+V".to_string(),
             autostart: false,
+            // Lista vazia de propósito: a migração semeia os padrões quando o arquivo
+            // é antigo. Uma lista aqui viraria "já configurada" e mudaria o caminho.
+            bindings: Vec::new(),
         }
     }
 }

@@ -9,7 +9,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 
 pub struct Store {
     dir: PathBuf,
@@ -23,7 +23,6 @@ struct Envelope<'a, T> {
 
 #[derive(Deserialize)]
 struct OwnedEnvelope<T> {
-    #[allow(dead_code)] // Lido quando houver migração de versões antigas.
     version: u32,
     data: T,
 }
@@ -34,16 +33,39 @@ impl Store {
     }
 
     /// Nunca falha: devolve `T::default()` quando não há dado legível.
+    ///
+    /// É o `load_versioned` sem a versão: o caminho de recuperação (principal, `.corrupt`,
+    /// `.bak`) fica num lugar só.
     pub fn load<T: DeserializeOwned + Default>(&self, name: &str) -> T {
+        self.load_versioned(name).1
+    }
+
+    /// Lê um documento junto com a versão do formato em que ele está.
+    ///
+    /// A versão é **0** quando o arquivo não existe ou não dá para ler. Quem chama
+    /// decide o que fazer com a versão (é o que permite migrar um formato antigo).
+    pub fn load_versioned<T: DeserializeOwned + Default>(&self, name: &str) -> (u32, T) {
         let main = self.path(name, ".json");
         if main.exists() {
-            if let Some(value) = read_document(&main) {
-                return value;
+            if let Some(encontrado) = read_versioned_document(&main) {
+                return encontrado;
             }
             // Ilegível: guarda para diagnóstico e tenta o backup.
             let _ = fs::rename(&main, self.path(name, ".json.corrupt"));
         }
-        read_document(&self.path(name, ".json.bak")).unwrap_or_default()
+        read_versioned_document(&self.path(name, ".json.bak")).unwrap_or((0, T::default()))
+    }
+
+    /// Guarda uma cópia do arquivo atual em `<name>.<rotulo>.bak`, **sem rotação**: se a
+    /// cópia já existe, fica como está. É o que mantém o original de antes de uma migração
+    /// (o `.bak` comum é trocado a cada gravação). Sem arquivo, não faz nada.
+    pub fn preserve_original(&self, name: &str, rotulo: &str) -> io::Result<()> {
+        let main = self.path(name, ".json");
+        let copia = self.path(name, &format!(".{rotulo}.bak"));
+        if main.exists() && !copia.exists() {
+            fs::copy(&main, &copia)?;
+        }
+        Ok(())
     }
 
     pub fn save<T: Serialize>(&self, name: &str, value: &T) -> io::Result<()> {
@@ -73,11 +95,11 @@ impl Store {
     }
 }
 
-fn read_document<T: DeserializeOwned>(path: &Path) -> Option<T> {
+/// Lê um documento e devolve a versão junto com o conteúdo.
+fn read_versioned_document<T: DeserializeOwned>(path: &Path) -> Option<(u32, T)> {
     let bytes = fs::read(path).ok()?;
-    serde_json::from_slice::<OwnedEnvelope<T>>(&bytes)
-        .ok()
-        .map(|envelope| envelope.data)
+    let envelope: OwnedEnvelope<T> = serde_json::from_slice(&bytes).ok()?;
+    Some((envelope.version, envelope.data))
 }
 
 #[cfg(test)]
@@ -109,6 +131,27 @@ mod tests {
         store.save("config", &sample(7, "abc")).unwrap();
         let loaded: Sample = store.load("config");
         assert_eq!(loaded, sample(7, "abc"));
+    }
+
+    #[test]
+    fn preserve_original_keeps_the_first_copy_across_saves() {
+        // M4: o `.bak` comum é trocado a cada gravação; a cópia da migração não.
+        let (dir, store) = open_temp();
+        store.save("config", &sample(1, "original")).unwrap();
+        store.preserve_original("config", "v1").unwrap();
+        store.save("config", &sample(2, "migrado")).unwrap();
+        store.save("config", &sample(3, "depois")).unwrap();
+        store.preserve_original("config", "v1").unwrap();
+
+        let copia = fs::read_to_string(dir.path().join("config.v1.bak")).unwrap();
+        assert!(copia.contains("original"), "{copia}");
+    }
+
+    #[test]
+    fn preserve_original_without_a_file_is_a_noop() {
+        let (dir, store) = open_temp();
+        store.preserve_original("config", "v1").unwrap();
+        assert!(!dir.path().join("config.v1.bak").exists());
     }
 
     #[test]
@@ -162,5 +205,50 @@ mod tests {
         store.save("config", &sample(3, "x")).unwrap();
         assert!(!dir.path().join("config.json.tmp").exists());
         assert!(dir.path().join("config.json").exists());
+    }
+
+    #[test]
+    fn load_versioned_returns_zero_when_the_file_is_missing() {
+        let (_dir, store) = open_temp();
+        let (version, value) = store.load_versioned::<Sample>("nao-existe");
+        assert_eq!(version, 0);
+        assert_eq!(value, Sample::default());
+    }
+
+    #[test]
+    fn load_versioned_returns_the_version_written_on_disk() {
+        let (dir, store) = open_temp();
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{"version":1,"data":{"n":3,"s":"x"}}"#,
+        )
+        .unwrap();
+
+        let (version, value) = store.load_versioned::<Sample>("config");
+
+        assert_eq!(version, 1);
+        assert_eq!(value, sample(3, "x"));
+    }
+
+    #[test]
+    fn load_versioned_returns_zero_when_the_file_is_garbage() {
+        let (dir, store) = open_temp();
+        fs::write(dir.path().join("config.json"), "isto não é json").unwrap();
+
+        let (version, value) = store.load_versioned::<Sample>("config");
+
+        assert_eq!(version, 0);
+        assert_eq!(value, Sample::default());
+        assert!(dir.path().join("config.json.corrupt").exists());
+    }
+
+    #[test]
+    fn save_writes_the_current_version() {
+        let (dir, store) = open_temp();
+        store.save("config", &sample(1, "x")).unwrap();
+
+        let bytes = fs::read(dir.path().join("config.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["version"], CURRENT_VERSION);
     }
 }

@@ -9,6 +9,10 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{App, AppHandle, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
+use crate::actions::Action;
+use crate::action_runtime;
+use crate::dispatcher::Dispatcher;
+use crate::hotkeys;
 use crate::shell_geometry::{corner_fallback, place_near_tray, Rect, Size};
 use crate::state::Settings;
 
@@ -34,9 +38,6 @@ type HiddenAt = Arc<Mutex<Option<Instant>>>;
 /// Último retângulo conhecido do ícone da bandeja, em pixels físicos. `None` antes do primeiro
 /// evento com posição válida: o painel então abre no canto da área de trabalho.
 static LAST_TRAY: Mutex<Option<Rect>> = Mutex::new(None);
-
-/// Atalho que está registrado agora (`None` antes do primeiro registro).
-static REGISTERED_SHORTCUT: Mutex<Option<String>> = Mutex::new(None);
 
 /// Enquanto o diálogo "Procurar .exe" está aberto, o painel perde o foco para ele e não deve
 /// se esconder. A interface liga e desliga pelo comando `set_blur_hide_suspended`. O prazo é
@@ -79,6 +80,11 @@ pub fn set_blur_hide_suspended(app: &AppHandle, suspended: bool) {
 }
 
 pub fn setup(app: &mut App) -> tauri::Result<()> {
+    // Sonda de conflito de atalho (S4): só em depuração e só com a variável `SONAR_PROBE_SHORTCUTS`
+    // definida. Roda antes de o app registrar o atalho guardado.
+    #[cfg(debug_assertions)]
+    probe_shortcuts_from_env(app.handle());
+
     let panel = app
         .get_webview_window(PANEL)
         .ok_or(tauri::Error::WindowNotFound)?;
@@ -134,7 +140,7 @@ pub fn setup(app: &mut App) -> tauri::Result<()> {
                 ..
             } = event
             {
-                toggle_panel(app, &hidden_at);
+                alterna_pelo_dispatcher(app);
             }
         })
         .build(app)?;
@@ -174,26 +180,48 @@ pub fn show_panel(app: &AppHandle) {
     }
 }
 
-fn toggle_panel(app: &AppHandle, hidden_at: &HiddenAt) {
+/// Alterna o painel. Devolve se o estado mudou de fato (`false` quando o painel não
+/// existe ou quando o clique foi o que tirou o foco dele).
+fn toggle_panel(app: &AppHandle, hidden_at: &HiddenAt) -> bool {
     let Some(panel) = app.get_webview_window(PANEL) else {
-        return;
+        return false;
     };
     if panel.is_visible().unwrap_or(false) {
         let _ = panel.hide();
-        return;
+        return true;
     }
     let just_hidden_by_blur = lock(hidden_at).is_some_and(|at| at.elapsed() < BLUR_GRACE);
-    if !just_hidden_by_blur {
-        show(&panel);
+    if just_hidden_by_blur {
+        return false;
     }
+    show(&panel);
+    true
 }
 
 /// Atalho global: alterna o painel pelo mesmo caminho da bandeja (graça e suspensão valem).
-pub fn toggle_from_shortcut(app: &AppHandle) {
+///
+/// O painel é do app, não do motor de áudio: é por aqui que a ação `TogglePanel` chega
+/// quando o `AppExecutor` a executa.
+pub fn toggle_from_shortcut(app: &AppHandle) -> bool {
     let Some(hidden_at) = app.try_state::<HiddenAt>() else {
+        return false;
+    };
+    toggle_panel(app, &hidden_at)
+}
+
+/// O clique na bandeja vira uma ação: o painel alterna pelo mesmo caminho do atalho.
+///
+/// A ação entra na fila; quem executa é o worker do `Dispatcher`. Sem fila (o app ainda
+/// está abrindo), o clique vai pelo caminho direto — perder o clique seria pior.
+fn alterna_pelo_dispatcher(app: &AppHandle) {
+    let Some(dispatcher) = app.try_state::<Dispatcher>() else {
+        if let Some(hidden_at) = app.try_state::<HiddenAt>() {
+            toggle_panel(app, &hidden_at);
+        }
         return;
     };
-    toggle_panel(app, &hidden_at);
+    let avisar = action_runtime::notificador(app);
+    action_runtime::submit(&dispatcher, Action::TogglePanel, &avisar);
 }
 
 fn show(panel: &WebviewWindow) {
@@ -281,7 +309,10 @@ impl ShortcutRegistrar for PluginShortcuts<'_> {
             .parse()
             .map_err(|_| format!("Atalho inválido: {accelerator}."))?;
         self.app.global_shortcut().register(shortcut).map_err(|_| {
-            format!("Não foi possível registrar o atalho {accelerator}. Outro programa pode estar usando essa combinação.")
+            format!(
+                "Não foi possível registrar o atalho {accelerator}. \
+                 Outro programa pode estar usando essa combinação."
+            )
         })
     }
 
@@ -292,12 +323,58 @@ impl ShortcutRegistrar for PluginShortcuts<'_> {
     }
 }
 
-/// Registra o atalho guardado agora. Em falha o atalho anterior segue e a frase vai de volta.
-pub fn apply_shortcut(app: &AppHandle, accelerator: &str) -> Result<(), String> {
-    let mut current = locked(&REGISTERED_SHORTCUT);
-    switch_shortcut(&PluginShortcuts { app }, current.as_deref(), accelerator)?;
-    *current = Some(accelerator.to_string());
-    Ok(())
+/// O registrador real: o plugin de atalho global do Windows.
+///
+/// É a ponte entre a lógica de binding (`hotkeys`) e o plugin: os testes usam um
+/// registrador falso, a produção usa este.
+pub fn registrador(app: &AppHandle) -> impl ShortcutRegistrar + '_ {
+    PluginShortcuts { app }
+}
+
+/// Sonda de conflito de atalho (spike S4): registra cada acelerador por um instante e solta,
+/// para saber se o Windows aceita registrá-lo. Ela registra e solta, uma tecla por vez, na
+/// ordem: um atalho que falhou não interrompe os outros e nada fica preso no sistema.
+/// Não é o mecanismo de registro do app (esse é o `apply_bindings` da fase F2).
+#[cfg(any(debug_assertions, test))]
+fn probe_shortcuts(
+    registrar: &dyn ShortcutRegistrar,
+    accelerators: &[&str],
+) -> Vec<(String, Result<(), String>)> {
+    accelerators
+        .iter()
+        .map(|accelerator| {
+            let result = registrar.register(accelerator);
+            // Solta sempre, mesmo depois de falhar: a sonda devolve o sistema como achou.
+            registrar.unregister(accelerator);
+            ((*accelerator).to_string(), result)
+        })
+        .collect()
+}
+
+/// Roda a sonda na abertura do app quando a variável `SONAR_PROBE_SHORTCUTS` lista os
+/// aceleradores (separados por vírgula). Só existe em builds de depuração: em release a
+/// variável nem é lida.
+#[cfg(debug_assertions)]
+fn probe_shortcuts_from_env(app: &AppHandle) {
+    let Ok(raw) = std::env::var("SONAR_PROBE_SHORTCUTS") else {
+        return;
+    };
+    let accelerators: Vec<&str> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    if accelerators.is_empty() {
+        return;
+    }
+    eprintln!("sonar: sonda de atalhos ({} combinações)", accelerators.len());
+    let registrar = PluginShortcuts { app };
+    for (accelerator, result) in probe_shortcuts(&registrar, &accelerators) {
+        match result {
+            Ok(()) => eprintln!("sonar: sonda OK {accelerator}"),
+            Err(err) => eprintln!("sonar: sonda FALHOU {accelerator}: {err}"),
+        }
+    }
 }
 
 /// Liga ou desliga "Iniciar com o Windows": valor `Sonar` em `HKCU\...\Run` com o caminho do
@@ -333,27 +410,16 @@ pub fn set_autostart(_enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Aplica o que foi salvo ao abrir o app: atalho e "Iniciar com o Windows" (que re-grava o
-/// caminho do executável, caso ele tenha mudado). Falha vira aviso no log: o app segue.
+/// Aplica o que foi salvo ao abrir o app: os atalhos da lista de bindings e "Iniciar com
+/// o Windows" (que re-grava o caminho do executável, caso ele tenha mudado).
+///
+/// O atalho legado não é registrado por aqui: ele virou o binding `toggle_panel` e quem
+/// registra os atalhos é o `hotkeys`. Falha vira aviso no log: o app segue.
 pub fn apply_at_startup(app: &AppHandle, settings: &Settings) {
-    if let Err(err) = apply_shortcut(app, &settings.shortcut) {
-        eprintln!("sonar: {err}");
-    }
     if let Err(err) = set_autostart(settings.autostart) {
         eprintln!("sonar: {err}");
     }
-}
-
-/// Aplica atalho e "Iniciar com o Windows" de uma gravação de configurações. Falha devolve a
-/// frase para a tela e a gravação não acontece: se o "Iniciar com o Windows" falhar, o atalho
-/// volta ao anterior.
-pub fn apply_settings(app: &AppHandle, previous: &Settings, next: &Settings) -> Result<(), String> {
-    apply_shortcut(app, &next.shortcut)?;
-    if let Err(err) = set_autostart(next.autostart) {
-        let _ = apply_shortcut(app, &previous.shortcut);
-        return Err(err);
-    }
-    Ok(())
+    hotkeys::apply_at_startup(app, settings);
 }
 
 #[cfg(test)]
@@ -434,13 +500,46 @@ mod tests {
     }
 
     #[test]
+    fn probe_reports_each_key_independently() {
+        let registrar = FakeRegistrar::default();
+
+        let results = probe_shortcuts(&registrar, &["Ctrl+Alt+M", "bad+Key", "Ctrl+Alt+Up"]);
+
+        assert_eq!(results.len(), 3);
+        // A ordem é a da lista e cada tecla tem o próprio resultado: a falha de uma não
+        // interrompe as outras.
+        assert_eq!(results[0].0, "Ctrl+Alt+M");
+        assert_eq!(results[0].1, Ok(()));
+        assert_eq!(results[1].0, "bad+Key");
+        assert_eq!(results[1].1, Err("Atalho inválido: bad+Key.".to_string()));
+        assert_eq!(results[2].0, "Ctrl+Alt+Up");
+        assert_eq!(results[2].1, Ok(()));
+        // Cada acelerador é registrado e solto antes do próximo: a sonda não deixa atalho
+        // preso no sistema.
+        assert_eq!(
+            *registrar.calls.borrow(),
+            vec![
+                "register Ctrl+Alt+M".to_string(),
+                "unregister Ctrl+Alt+M".to_string(),
+                "register bad+Key".to_string(),
+                "unregister bad+Key".to_string(),
+                "register Ctrl+Alt+Up".to_string(),
+                "unregister Ctrl+Alt+Up".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn every_shortcut_the_settings_screen_can_produce_parses() {
         // Mesmo conjunto de `shortcutFromKeys` (src/screens/settingsModel.ts): Ctrl, Alt,
-        // Shift e Super, com pelo menos Ctrl, Alt ou Super; tecla letra, dígito ou F1 a F12.
+        // Shift e Super, com pelo menos Ctrl, Alt ou Super; tecla letra, dígito, F1 a F12
+        // ou uma das setas (Up, Down).
         let modifiers = ["Ctrl", "Alt", "Shift", "Super"];
         let mut mains: Vec<String> = ('A'..='Z').map(|c| c.to_string()).collect();
         mains.extend((0..=9).map(|d| d.to_string()));
         mains.extend((1..=12).map(|f| format!("F{f}")));
+        mains.push("Up".to_string());
+        mains.push("Down".to_string());
         let mut checked = 0;
         for mask in 0u32..16 {
             let chosen: Vec<&str> = modifiers
@@ -464,8 +563,10 @@ mod tests {
                 checked += 1;
             }
         }
-        // 14 combinações de modificadores (16 menos as que são só Shift) x 48 teclas principais.
-        assert_eq!(checked, 14 * 48);
+        // 14 combinações de modificadores (16 máscaras menos a vazia e a de só Shift) x 50 teclas
+        // principais (26 letras + 10 dígitos + 12 teclas F + Up + Down).
+        assert_eq!(mains.len(), 26 + 10 + 12 + 2);
+        assert_eq!(checked, 14 * 50);
         assert!("Super+Alt+V".parse::<Shortcut>().is_ok());
     }
 }

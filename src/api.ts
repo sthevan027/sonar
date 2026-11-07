@@ -5,7 +5,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
+  Action,
+  ActionResult,
   AppState,
+  Binding,
+  BindingStatusEntry,
   Flow,
   MicLevel,
   Profile,
@@ -78,6 +82,48 @@ export function saveSettings(settings: Settings): Promise<void> {
 /** Assina `state-changed`. Devolve a função que cancela a assinatura. */
 export function onStateChanged(callback: (state: AppState) => void): Promise<UnlistenFn> {
   return listen<AppState>("state-changed", (event) => callback(event.payload));
+}
+
+/**
+ * Estado de registro dos bindings: uma entrada por binding, na mesma ordem de
+ * `settings.bindings`. O acelerador viaja com o estado para o painel casar status x binding
+ * sem depender da ordem (Ruling 41).
+ */
+export function getBindingStatus(): Promise<BindingStatusEntry[]> {
+  return invoke<BindingStatusEntry[]>("get_binding_status");
+}
+
+/**
+ * Atalhos padrão do app. Vem do Rust (`bindings::default_bindings()`), que é a mesma lista
+ * que a migração semeia: o TypeScript não guarda cópia, senão as duas listas divergem.
+ */
+export function getDefaultBindings(): Promise<Binding[]> {
+  return invoke<Binding[]>("get_default_bindings");
+}
+
+/**
+ * Grava a lista inteira de bindings. O Rust valida a lista toda, registra e só então
+ * persiste; em erro, rejeita com a frase em português e não grava nada.
+ */
+export function saveBindings(bindings: Binding[]): Promise<BindingStatusEntry[]> {
+  return invoke<BindingStatusEntry[]>("save_bindings", { bindings });
+}
+
+/** Executa uma ação na hora, sem passar pela fila de atalho. */
+export function dispatchAction(action: Action): Promise<ActionResult> {
+  return invoke<ActionResult>("dispatch_action", { action });
+}
+
+/** Assina `bindings-status`. Devolve a função que cancela a assinatura. */
+export function onBindingsStatus(
+  callback: (status: BindingStatusEntry[]) => void,
+): Promise<UnlistenFn> {
+  return listen<BindingStatusEntry[]>("bindings-status", (event) => callback(event.payload));
+}
+
+/** Assina `action-result`: o resultado de uma ação disparada por atalho. */
+export function onActionResult(callback: (result: ActionResult) => void): Promise<UnlistenFn> {
+  return listen<ActionResult>("action-result", (event) => callback(event.payload));
 }
 
 /** Assina `mic-level` (cerca de 15 vezes por segundo com o painel aberto). */

@@ -7,10 +7,10 @@ import { Toggle } from "../components/Toggle";
 import { useAppState } from "../store";
 import type { Settings as AppSettings } from "../types";
 import { UpdateSection } from "./UpdateSection";
+import { bindingsOf } from "./bindingsModel";
 import {
   APP_NAME,
   APP_VERSION,
-  DEFAULT_SHORTCUT,
   shortcutFromKeys,
   shortcutKeys,
 } from "./settingsModel";
@@ -19,6 +19,8 @@ interface SettingsProps {
   onBack: () => void;
   onOpenDevices: () => void;
   onOpenProfiles: () => void;
+  /** Abre a sub-tela "Atalhos globais" (a lista de bindings). */
+  onOpenBindings: () => void;
 }
 
 /**
@@ -39,7 +41,7 @@ function enqueueSettings(call: () => Promise<void>, onFail: (error: unknown) => 
  * confirmado. Atalho e "Iniciar com o Windows" são aplicados pelo Rust ao gravar; se recusarem,
  * a frase de motivo aparece no aviso.
  */
-export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProps) {
+export function Settings({ onBack, onOpenDevices, onOpenProfiles, onOpenBindings }: SettingsProps) {
   const state = useAppState();
   const notify = useToast();
   const storeSettings = state.settings as AppSettings | undefined;
@@ -51,6 +53,9 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
   const base = useRef<AppSettings | null>(confirmed);
   const [capturing, setCapturing] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
+  // Atalho de fábrica do painel: vem do Rust (`get_default_bindings`), sem cópia aqui.
+  // `null` até chegar (ou se falhar): o link "Restaurar" simplesmente não aparece.
+  const [defaultShortcut, setDefaultShortcut] = useState<string | null>(null);
   const keysRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -80,6 +85,20 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
   }, [confirmed]);
 
   useEffect(() => {
+    let alive = true;
+    api.getDefaultBindings().then(
+      (defaults) => {
+        const panel = defaults.find((b) => b.action.type === "toggle_panel");
+        if (alive && panel) setDefaultShortcut(panel.accelerator);
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (capturing) keysRef.current?.focus();
   }, [capturing]);
 
@@ -91,7 +110,10 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
       () => {
         const current = base.current;
         if (!current) return Promise.resolve();
-        return api.saveSettings({ ...current, ...wanted.current });
+        // Só atalho e autostart: a lista de atalhos é da tela de atalhos. Reenviar o
+        // `bindings` do snapshot desfaria uma edição ainda em voo (ausente = não mexe).
+        const { shortcut, autostart } = { ...current, ...wanted.current };
+        return api.saveSettings({ shortcut, autostart });
       },
       (error: unknown) => {
         const rest = { ...wanted.current };
@@ -134,7 +156,20 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
   const keys = shown ? shortcutKeys(shown.shortcut) : [];
   const outputs = state.devices.filter((d) => d.flow === "render").length;
   const inputs = state.devices.filter((d) => d.flow === "capture").length;
-  const helpText = hint ?? (capturing ? "Pressione a combinação. Esc cancela." : "Abre o painel na hora");
+
+  // A linha "Atalho global" é o binding `toggle_panel`. Sem binding por trás, ela mostra
+  // o estado "sem atalho" (D3): nada é apagado sozinho.
+  const bindings = bindingsOf(shown);
+  const togglePanel = bindings?.find((b) => b.action.type === "toggle_panel");
+  const withoutShortcut = bindings !== null && !togglePanel;
+  const shownKeys = withoutShortcut ? ["—"] : keys;
+  const helpText = hint
+    ? hint
+    : capturing
+      ? "Pressione a combinação. Esc cancela."
+      : withoutShortcut
+        ? "Nenhum atalho. Toque para definir."
+        : "Abre o painel na hora";
 
   return (
     <div className="tab-body">
@@ -177,14 +212,14 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
               <span className={hint ? "bad" : undefined} aria-live="polite">
                 {helpText}
               </span>
-              {shown && shown.shortcut !== DEFAULT_SHORTCUT && (
+              {shown && defaultShortcut !== null && shown.shortcut !== defaultShortcut && (
                 <button
                   type="button"
                   className="rst"
-                  onClick={() => change("shortcut", DEFAULT_SHORTCUT)}
+                  onClick={() => change("shortcut", defaultShortcut)}
                 >
                   <Icon name="rotate-ccw" size={14} />
-                  Restaurar atalho padrão (Win Alt V)
+                  Restaurar atalho padrão ({shortcutKeys(defaultShortcut).join(" ")})
                 </button>
               )}
             </div>
@@ -196,7 +231,7 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
               aria-label={
                 capturing
                   ? "Digite a combinação do atalho"
-                  : `Atalho global: ${keys.join(" ")}. Toque para trocar.`
+                  : `Atalho global: ${shownKeys.join(" ")}. Toque para trocar.`
               }
               onClick={() => {
                 setHint(null);
@@ -211,7 +246,7 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
               {capturing ? (
                 <span className="keys-hint">Pressione a combinação</span>
               ) : (
-                keys.map((key) => (
+                shownKeys.map((key) => (
                   <span key={key} className="k">
                     {key}
                   </span>
@@ -219,6 +254,23 @@ export function Settings({ onBack, onOpenDevices, onOpenProfiles }: SettingsProp
               )}
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="ed-sec">
+        <div className="lbl">Atalhos</div>
+        <div className="grp">
+          <button type="button" className="it" onClick={onOpenBindings}>
+            <div className="stile">
+              <Icon name="keyboard" size={20} />
+            </div>
+            <div className="tx">
+              <b>Atalhos globais</b>
+              <span>Atalhos de teclado para as ações</span>
+            </div>
+            <span className="cnt">{bindings?.length ?? 0}</span>
+            <Icon name="chevron-right" size={18} />
+          </button>
         </div>
       </div>
 

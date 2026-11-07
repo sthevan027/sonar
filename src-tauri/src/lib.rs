@@ -1,12 +1,13 @@
 mod shell;
 mod shell_geometry;
-#[allow(dead_code)] // Tasks seguintes consomem o roteador; até lá só os testes o usam.
+mod dispatcher;
+mod actions;
+mod action_runtime;
+mod bindings;
+mod hotkeys;
 mod audio;
-#[allow(dead_code)] // Task 9 consome as regras; até lá só os testes o usam.
 mod rules;
-#[allow(dead_code)] // Task 9 consome o Store; até lá só os testes o usam.
 mod store;
-#[allow(dead_code)] // Task 9 consome o perfil; até lá só os testes o usam.
 mod profiles;
 mod state;
 mod engine;
@@ -27,6 +28,7 @@ use audio::endpoint::WindowsEndpoint;
 use audio::policy::WindowsRouteBackend;
 use audio::types::AudioEvent;
 use commands::MicLevel;
+use dispatcher::Dispatcher;
 use engine::Engine;
 use state::AppState;
 use store::Store;
@@ -49,12 +51,23 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Atualização: checa o endpoint de `plugins.updater` (tauri.conf.json) e verifica a assinatura.
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // O atalho global alterna o painel pelo mesmo caminho da bandeja (shell::toggle_from_shortcut).
+        // O atalho global vira uma ação e entra na fila: o handler não executa nada, ele
+        // só enfileira. Quem executa é o worker do `Dispatcher`.
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        shell::toggle_from_shortcut(app);
+                        let Some(dispatcher) = app.try_state::<Dispatcher>() else {
+                            return;
+                        };
+                        let bindings = hotkeys::registrados();
+                        let avisar = action_runtime::notificador(app);
+                        action_runtime::enfileirar_atalho(
+                            &dispatcher,
+                            &bindings,
+                            shortcut,
+                            &avisar,
+                        );
                     }
                 })
                 .build(),
@@ -80,9 +93,13 @@ pub fn run() {
             commands::activate_profile,
             commands::get_settings,
             commands::save_settings,
+            commands::save_bindings,
+            commands::get_binding_status,
+            commands::get_default_bindings,
             commands::list_running_apps,
             commands::app_icon,
             commands::set_blur_hide_suspended,
+            commands::dispatch_action,
             updates::check_for_update,
             updates::install_update,
             updates::pending_update,
@@ -116,6 +133,25 @@ fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
         }),
     ));
     app.manage(engine.clone());
+
+    // A fila de ações: é por ela que atalho, bandeja e IPC passam. O executor sabe mexer
+    // no painel; o `report` publica no painel o que não deu certo.
+    let executor = Arc::new(action_runtime::AppExecutor::new(
+        engine.clone(),
+        app_handle.clone(),
+    ));
+    let avisar = action_runtime::notificador(&app_handle);
+    let report: Arc<dyn Fn(&actions::Action, &actions::ActionResult) + Send + Sync> =
+        Arc::new(move |acao: &actions::Action, resultado: &actions::ActionResult| {
+            // O evento sai só quando a ação não deu certo (Ruling 17). Um sucesso parcial
+            // (`ok == false`, `changed == true`) também sai: o usuário precisa saber que
+            // o pedido foi cumprido só pela metade.
+            if action_runtime::reporta_se_falhou(resultado) {
+                avisar(acao, resultado);
+            }
+        });
+    let dispatcher = Dispatcher::spawn_default(executor, report);
+    app.manage(dispatcher);
     // Atalho e "Iniciar com o Windows" guardados valem desde a abertura.
     shell::apply_at_startup(&app_handle, &engine.settings());
 

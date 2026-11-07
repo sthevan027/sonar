@@ -48,6 +48,7 @@ impl RuleSet {
         self.rules.retain(|r| !(r.exe == exe && r.flow == flow));
     }
 
+    #[cfg(test)]
     pub fn get(&self, exe: &str, flow: Flow) -> Option<&Rule> {
         let exe = exe.to_lowercase();
         self.rules.iter().find(|r| r.exe == exe && r.flow == flow)

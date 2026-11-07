@@ -1,11 +1,13 @@
 import { Suspense, useState } from "react";
 import "./styles/base.css";
+import { ActionResultToasts } from "./components/ActionResultToasts";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/Toast";
 import type { Route } from "./routes";
 import { Devices } from "./screens/Devices";
 import { Panel } from "./screens/Panel";
 import { ProfileEditor } from "./screens/ProfileEditor";
+import { Bindings } from "./screens/Bindings";
 import { Settings } from "./screens/Settings";
 import { retryAppState } from "./store";
 
@@ -14,6 +16,7 @@ export default function App() {
   return (
     <main className="win">
       <ToastProvider>
+        <ActionResultToasts />
         <ErrorBoundary onReset={retryAppState}>
           <Suspense fallback={null}>
             <Screen route={route} navigate={setRoute} />
@@ -54,7 +57,12 @@ function Screen({ route, navigate }: { route: Route; navigate: (route: Route) =>
           }
           // Não há tela de lista de perfis: a barra de perfis mora no painel.
           onOpenProfiles={() => navigate({ name: "panel", tab: route.returnTab })}
+          onOpenBindings={() => navigate({ name: "bindings", returnTab: route.returnTab })}
         />
+      );
+    case "bindings":
+      return (
+        <Bindings onBack={() => navigate({ name: "settings", returnTab: route.returnTab })} />
       );
     case "devices":
       return (
