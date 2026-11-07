@@ -17,7 +17,11 @@ import {
   withDevice,
   withDirection,
   withExe,
-  withMuted,
+  withMuteState,
+  muteState,
+  muteStateLabel,
+  muteStateOptions,
+  familyKind,
   withProfile,
   withValue,
 } from "./bindingsModel";
@@ -97,7 +101,7 @@ export function BindingEditor({
 
   function selectKind(kind: Action["type"]) {
     // Trocar de família reinicia o parâmetro; ficar na mesma família mantém a escolha.
-    setAction((current) => (current.type === kind ? current : actionOfKind(kind)));
+    setAction((current) => (familyKind(current.type) === kind ? current : actionOfKind(kind)));
     setPicker(null);
   }
 
@@ -148,12 +152,12 @@ export function BindingEditor({
                     <li key={choice.kind}>
                       <button
                         type="button"
-                        className={choice.kind === action.type ? "pick on" : "pick"}
+                        className={choice.kind === familyKind(action.type) ? "pick on" : "pick"}
                         onClick={() => selectKind(choice.kind)}
                       >
                         <Icon name={choice.icon} size={16} />
                         <span>{choice.label}</span>
-                        {choice.kind === action.type ? (
+                        {choice.kind === familyKind(action.type) ? (
                           <Icon name="check" size={15} />
                         ) : (
                           choice.hint && <em className="cnt">{choice.hint}</em>
@@ -330,20 +334,13 @@ export function BindingEditor({
             {picker === "muted" && (
               <div className="picker">
                 <ul className="pick-list" aria-label="Estado">
-                  {mutedOptions.map((option) => (
-                    <li key={option.muted ? "sim" : "nao"}>
+                  {muteStateOptions(action).map((option) => (
+                    <li key={option.state}>
                       <button
                         type="button"
-                        className={
-                          (action.type === "set_output_mute" ||
-                            action.type === "set_mic_mute" ||
-                            action.type === "set_app_mute") &&
-                          action.muted === option.muted
-                            ? "pick on"
-                            : "pick"
-                        }
+                        className={muteState(action) === option.state ? "pick on" : "pick"}
                         onClick={() => {
-                          setAction(withMuted(action, option.muted));
+                          setAction(withMuteState(action, option.state));
                           setPicker(null);
                         }}
                       >
@@ -428,11 +425,6 @@ export function BindingEditor({
     </div>
   );
 }
-
-const mutedOptions = [
-  { muted: true, label: "Silenciar" },
-  { muted: false, label: "Ativar o som" },
-];
 
 const deltaOptions = [
   { delta: 0.05, label: "Subir 5%" },
@@ -520,12 +512,14 @@ function parametersOf(
           onClick={() => open("direction")}
         />
       );
+    case "toggle_mic_mute":
     case "set_mic_mute":
+    case "toggle_output_mute":
     case "set_output_mute":
       return (
         <ParamField
           label="Estado"
-          value={action.muted ? "Silenciar" : "Ativar o som"}
+          value={muteStateLabel(action)}
           onClick={() => open("muted")}
         />
       );
@@ -563,7 +557,7 @@ function parametersOf(
           />
           <ParamField
             label="Estado"
-            value={action.muted ? "Silenciar" : "Ativar o som"}
+            value={muteStateLabel(action)}
             onClick={() => open("muted")}
           />
         </>

@@ -85,28 +85,14 @@ const RAW_CHOICES: Omit<ActionChoice, "group">[] = [
   },
   {
     kind: "toggle_mic_mute",
-    label: "Alternar o mudo do microfone padrão",
-    hint: "",
-    icon: "mic",
-    brass: false,
-  },
-  {
-    kind: "set_mic_mute",
-    label: "Silenciar / Ativar o microfone padrão",
+    label: "Mudo do microfone padrão",
     hint: "mudo",
     icon: "mic",
     brass: false,
   },
   {
     kind: "toggle_output_mute",
-    label: "Alternar o mudo da saída padrão",
-    hint: "",
-    icon: "volume-x",
-    brass: false,
-  },
-  {
-    kind: "set_output_mute",
-    label: "Silenciar / Ativar o som da saída padrão",
+    label: "Mudo da saída padrão",
     hint: "mudo",
     icon: "volume-x",
     brass: false,
@@ -210,15 +196,68 @@ export function withDirection(action: Action, direction: Direction): Action {
   return action;
 }
 
-export function withMuted(action: Action, muted: boolean): Action {
-  if (
-    action.type === "set_output_mute" ||
-    action.type === "set_mic_mute" ||
-    action.type === "set_app_mute"
-  ) {
-    return { ...action, muted };
+/** O estado de um mudo: inverter, silenciar ou ativar o som. */
+export type MuteState = "toggle" | "mute" | "unmute";
+
+/** A "família" da ação no seletor: alternar e definir o mudo são a mesma escolha. */
+export function familyKind(type: ActionKind): ActionKind {
+  if (type === "set_mic_mute") return "toggle_mic_mute";
+  if (type === "set_output_mute") return "toggle_output_mute";
+  return type;
+}
+
+/** O estado escolhido numa ação de mudo; `null` nas outras ações. */
+export function muteState(action: Action): MuteState | null {
+  switch (action.type) {
+    case "toggle_mic_mute":
+    case "toggle_output_mute":
+      return "toggle";
+    case "set_mic_mute":
+    case "set_output_mute":
+    case "set_app_mute":
+      return action.muted ? "mute" : "unmute";
+    default:
+      return null;
   }
-  return action;
+}
+
+/** Aplica o estado escolhido. O app não tem "alternar": o pedido vira "silenciar". */
+export function withMuteState(action: Action, state: MuteState): Action {
+  const muted = state !== "unmute";
+  switch (action.type) {
+    case "toggle_mic_mute":
+    case "set_mic_mute":
+      return state === "toggle" ? { type: "toggle_mic_mute" } : { type: "set_mic_mute", muted };
+    case "toggle_output_mute":
+    case "set_output_mute":
+      return state === "toggle"
+        ? { type: "toggle_output_mute" }
+        : { type: "set_output_mute", muted };
+    case "set_app_mute":
+      return { ...action, muted };
+    default:
+      return action;
+  }
+}
+
+/** As opções de estado e o texto de cada uma, conforme o alvo do mudo. */
+export function muteStateOptions(action: Action): { state: MuteState; label: string }[] {
+  const unmute =
+    action.type === "toggle_mic_mute" || action.type === "set_mic_mute"
+      ? "Ativar o microfone"
+      : "Ativar o som";
+  const all: { state: MuteState; label: string }[] = [
+    { state: "toggle", label: "Alternar" },
+    { state: "mute", label: "Silenciar" },
+    { state: "unmute", label: unmute },
+  ];
+  return action.type === "set_app_mute" ? all.filter((o) => o.state !== "toggle") : all;
+}
+
+/** O texto do estado atual, para o campo "Estado". */
+export function muteStateLabel(action: Action): string {
+  const state = muteState(action);
+  return muteStateOptions(action).find((o) => o.state === state)?.label ?? "";
 }
 
 export function withDelta(action: Action, delta: number): Action {
@@ -256,6 +295,8 @@ export function hasParameters(kind: ActionKind): boolean {
   return (
     kind === "activate_profile" ||
     kind === "cycle_profile" ||
+    kind === "toggle_output_mute" ||
+    kind === "toggle_mic_mute" ||
     kind === "set_output_mute" ||
     kind === "set_mic_mute" ||
     kind === "step_output_volume" ||
@@ -319,6 +360,7 @@ export function bindingDetail(action: Action, ctx: LabelContext): string {
     case "toggle_output_mute":
       return "Alternar o mudo";
     case "set_mic_mute":
+      return action.muted ? "Silenciar" : "Ativar o microfone";
     case "set_output_mute":
       return action.muted ? "Silenciar" : "Ativar o som";
     case "step_output_volume":
