@@ -26,6 +26,16 @@
   --font-display: "Bricolage Grotesque", sans-serif;
   --font-text: "DM Sans", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
+
+  /* Escala tipográfica por função (utilitário denso: passos de meio pixel, poucos degraus).
+     Texto claro sobre fundo escuro "sangra" e parece menor: por isso cada degrau é ~0,5 px
+     maior que o valor antigo. */
+  --fs-label: 11.5px; /* rótulos em caixa alta */
+  --fs-meta: 12.5px; /* metadados, notas, contagens */
+  --fs-small: 13.5px; /* texto secundário */
+  --fs-body: 14.5px; /* texto principal, listas, campos */
+  --fs-heading: 18px; /* títulos de tela e de perfil */
+  --fs-title: 24px; /* título do painel */
 }
 
 /* A janela é transparente: o painel desenha o próprio fundo e os cantos. */
