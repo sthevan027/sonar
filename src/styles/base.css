@@ -37,7 +37,7 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-/* Janela do painel: 388x668 dentro da janela transparente de 420x700. */
+/* Janela do painel: 388x668, do tamanho exato da janela do app (sem margem transparente). */
 .win {
   position: relative;
   width: 388px;

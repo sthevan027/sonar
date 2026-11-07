@@ -14,8 +14,8 @@
       {
         "label": "panel",
         "title": "Sonar",
-        "width": 420,
-        "height": 700,
+        "width": 388,
+        "height": 668,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
