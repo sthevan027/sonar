@@ -33,8 +33,9 @@ html,
 body,
 #root {
   margin: 0;
-  width: 420px;
-  height: 700px;
+  /* Do tamanho da janela (388x668): o cartão preenche tudo e os quatro cantos aparecem. */
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   background: transparent;
 }

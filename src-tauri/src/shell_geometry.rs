@@ -25,8 +25,8 @@ pub struct Point {
 }
 
 /// Distância entre o painel e a borda da área de trabalho (a barra de tarefas), em pixels
-/// físicos: 1 px, o mínimo para o painel não encostar na barra.
-const MARGIN: i32 = 1;
+/// físicos: 8 px, uma folga pequena que deixa o canto de baixo arredondado à vista.
+const MARGIN: i32 = 8;
 
 impl Rect {
     fn right(&self) -> i32 {
@@ -162,8 +162,8 @@ mod tests {
     }
 
     #[test]
-    fn place_near_tray_bottom_taskbar_is_one_pixel_away_and_centred_on_the_icon() {
-        // O painel encosta a 1 px da barra e fica centrado no ícone.
+    fn place_near_tray_bottom_taskbar_leaves_a_small_gap_and_is_centred_on_the_icon() {
+        // O painel fica a 8 px da barra e centrado no ícone.
         let tray = Rect {
             x: 1000,
             y: 1050,
@@ -173,7 +173,7 @@ mod tests {
 
         let p = place_near_tray(tray, bottom_work_area(), PANEL);
 
-        assert_eq!(p.y + PANEL.height, 1040 - 1, "1 px acima da barra");
+        assert_eq!(p.y + PANEL.height, 1040 - 8, "8 px acima da barra");
         assert_eq!(p.x + PANEL.width / 2, tray.x + tray.width / 2, "centrado no ícone");
     }
 
@@ -272,7 +272,7 @@ mod tests {
     fn corner_fallback_is_bottom_right_of_work_area() {
         assert_eq!(
             corner_fallback(bottom_work_area(), PANEL),
-            Point { x: 1499, y: 339 }
+            Point { x: 1492, y: 332 }
         );
     }
 
