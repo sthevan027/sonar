@@ -34,7 +34,7 @@ pub fn default_bindings() -> Vec<Binding> {
         },
         Binding {
             accelerator: "Ctrl+Alt+M".to_string(),
-            action: Action::ToggleOutputMute,
+            action: Action::ToggleMicMute,
         },
         Binding {
             accelerator: "Ctrl+Alt+Up".to_string(),
@@ -206,7 +206,7 @@ mod tests {
         assert_eq!(bindings[0].accelerator, "Super+Alt+V");
         assert_eq!(bindings[0].action, Action::TogglePanel);
         assert_eq!(bindings[1].accelerator, "Ctrl+Alt+M");
-        assert_eq!(bindings[1].action, Action::ToggleOutputMute);
+        assert_eq!(bindings[1].action, Action::ToggleMicMute);
         assert_eq!(bindings[2].accelerator, "Ctrl+Alt+Up");
         assert_eq!(bindings[2].action, Action::StepOutputVolume { delta: 0.05 });
         assert_eq!(bindings[3].accelerator, "Ctrl+Alt+Down");
@@ -426,7 +426,7 @@ mod tests {
         assert!(!migrada
             .bindings
             .iter()
-            .any(|b| b.action == Action::ToggleOutputMute));
+            .any(|b| b.action == Action::ToggleMicMute));
         assert!(migrada
             .bindings
             .iter()

@@ -330,7 +330,9 @@ export function BindingEditor({
                       <button
                         type="button"
                         className={
-                          (action.type === "set_output_mute" || action.type === "set_app_mute") &&
+                          (action.type === "set_output_mute" ||
+                            action.type === "set_mic_mute" ||
+                            action.type === "set_app_mute") &&
                           action.muted === option.muted
                             ? "pick on"
                             : "pick"
@@ -513,6 +515,7 @@ function parametersOf(
           onClick={() => open("direction")}
         />
       );
+    case "set_mic_mute":
     case "set_output_mute":
       return (
         <ParamField

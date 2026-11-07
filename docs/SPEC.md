@@ -45,7 +45,7 @@ Convenções: toda ação devolve `{ ok, changed, resolved, error_code, message 
 
 - **`ok` e `changed` são independentes.** `ok` = "a ação cumpriu o pedido inteiro"; `changed` = "o estado mudou de fato". Uma ação que cumpriu **só parte** do pedido devolve `ok: false` **e** `changed: true`, com o `error_code` e a `message` do primeiro erro — nunca `ok: true` com o erro escondido. `ok == false` **não** implica `changed == false`: o painel não pode descartar a atualização de estado só porque a ação falhou.
 - **A `message` de uma falha parcial diz as duas coisas** (o que mudou e o que falhou), para o usuário não ler "erro" e achar que nada aconteceu.
-- **`error_code`** é um de: `profile_not_found`, `no_profiles`, `no_output_device`, `not_enough_outputs`, `device_gone`, `unsupported`, `os_error`, `invalid_exe`, `invalid_value`, `queue_full`, `internal` (snake_case). `internal` é falha **do app** (ex.: pânico no executor), não recusa do Windows.
+- **`error_code`** é um de: `profile_not_found`, `no_profiles`, `no_output_device`, `no_input_device`, `not_enough_outputs`, `device_gone`, `unsupported`, `os_error`, `invalid_exe`, `invalid_value`, `queue_full`, `internal` (snake_case). `internal` é falha **do app** (ex.: pânico no executor), não recusa do Windows.
 - **O evento `action-result`** é emitido quando `ok == false` — é por ele que o aviso chega ao usuário, inclusive nos casos de sucesso parcial.
 
 | ID | Ação | Alvo | Atalho padrão | Comportamento esperado | Erro esperado |
@@ -53,6 +53,7 @@ Convenções: toda ação devolve `{ ok, changed, resolved, error_code, message 
 | A2 | Ativar perfil `profile_id` | global | Sem atalho semeado. O atalho é criado pelo usuário, como binding de perfil. **Proposta (Task 16):** a tela de Configurações sugere `Ctrl+Alt+1`…`Ctrl+Alt+9` para os perfis que ainda não têm binding | Aplica `profiles::activate`: rotas e regras dos apps listados | "Perfil não encontrado." (design: `commands.rs:126`). Roteamento indisponível: erro com código |
 | A3 | Próximo perfil (`direction: next \| prev`) | global | `Ctrl+Alt+P` (próximo, proposta) | Avança na ordem da lista de perfis, volta ao início no fim, e aplica (como A2) | Sem perfis: erro `no_profiles` (`ok: false`), com aviso ao usuário pelo evento `action-result`. Perfil atual apagado: vai ao primeiro |
 | A4 | Mudo da saída padrão (`muted: true \| false`) | saída padrão (render) | `Ctrl+Alt+M` (ver Q1) | Define o mudo do endpoint padrão | "O dispositivo não está mais disponível." (`Gone`) |
+| A4m | Mudo do microfone padrão (`set_mic_mute { muted }` e `toggle_mic_mute`) | microfone padrão (capture) | **`Ctrl+Alt+M`** (decidido em 2026-11-07: o atalho de mudo é o do microfone) | Igual A4, no microfone padrão. Sem microfone padrão conectado: `no_input_device` | Igual A4 |
 | A6 | Volume da saída padrão, relativo (`delta`) | saída padrão | `Ctrl+Alt+↑` / `Ctrl+Alt+↓` (±0,05) — **provisionais até o S4** | Soma os deltas de uma rajada (coalescência) e aplica uma vez. Resultado com clamp 0 a 1 | Igual A4 |
 | A7 | Volume absoluto da saída padrão (`value`) | saída padrão | Sem padrão (definir após S4) | Define o volume; clamp 0 a 1; a última ação vence. Ressalva: dentro do epsilon de 0,0001 do valor atual, nada é gravado e `changed` é `false` — mesma regra de idempotência de `set` do RF-06/RF-14 | Igual A4 |
 | A8 | Mudo de app (`exe`, `muted`) | sessões de render do exe, todos os pids | Sem padrão (definir após S4) | Define o mudo de todas as sessões existentes do exe | Sem sessão ativa: `ok` com `changed: false`, não é erro. Exe inválido: erro de validação |
@@ -182,7 +183,7 @@ Windows 10 não testado: fica fora desta versão, como na v1.
 
 | Atalho ou ação | Passos | Resultado esperado |
 |---|---|---|
-| `Ctrl+Alt+M` (A4) | Tocar música. Apertar duas vezes | Muta e desmuta. O ícone de volume do Windows acompanha |
+| `Ctrl+Alt+M` (A4m, microfone) | Abrir o painel e ver o microfone padrão. Apertar duas vezes | Muta e desmuta o microfone. O estado no painel acompanha (e o ícone de microfone do Windows) |
 | `Ctrl+Alt+↑/↓` (A6, proposta) | Apertar cinco vezes rápido | Volume muda em um ajuste só, sem travar |
 | `Ctrl+Alt+1` (A2) | Perfil "Jogo" | Rotas mudam. Apps fora do perfil não mudam |
 | `Ctrl+Alt+P` (A3) | Três perfis. Apertar quatro vezes | Ciclo 1, 2, 3, 1 |

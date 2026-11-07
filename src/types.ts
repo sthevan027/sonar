@@ -86,6 +86,8 @@ export type Action =
   | { type: "toggle_panel" }
   | { type: "activate_profile"; profile_id: string }
   | { type: "cycle_profile"; direction: Direction }
+  | { type: "set_mic_mute"; muted: boolean }
+  | { type: "toggle_mic_mute" }
   | { type: "set_output_mute"; muted: boolean }
   | { type: "toggle_output_mute" }
   | { type: "step_output_volume"; delta: number }
@@ -122,6 +124,7 @@ export type ErrorCode =
   | "profile_not_found"
   | "no_profiles"
   | "no_output_device"
+  | "no_input_device"
   | "not_enough_outputs"
   | "device_gone"
   | "unsupported"

@@ -483,12 +483,28 @@ impl Engine {
     /// método: duas ações de mudo não podem se cruzar. O estado do mudo é lido na hora (o
     /// valor guardado pode ser velho) e a escrita só acontece quando o valor muda.
     pub fn act_output_mute(&self, mode: MuteMode) -> ActionResult {
+        self.act_default_mute(Flow::Render, mode)
+    }
+
+    /// Liga, desliga ou inverte o mudo do microfone padrão (mesma regra do mudo da saída).
+    pub fn act_mic_mute(&self, mode: MuteMode) -> ActionResult {
+        self.act_default_mute(Flow::Capture, mode)
+    }
+
+    /// O mudo do dispositivo padrão de um sentido. Segura `apply` durante todo o método.
+    fn act_default_mute(&self, flow: Flow, mode: MuteMode) -> ActionResult {
         let _apply = guard(&self.apply);
-        let Some(id) = self.default_render() else {
-            return ActionResult::failed(
-                ErrorCode::NoOutputDevice,
-                "Não há saída padrão conectada.",
-            );
+        let Some(id) = self.default_device(flow) else {
+            return match flow {
+                Flow::Render => ActionResult::failed(
+                    ErrorCode::NoOutputDevice,
+                    "Não há saída padrão conectada.",
+                ),
+                Flow::Capture => ActionResult::failed(
+                    ErrorCode::NoInputDevice,
+                    "Não há microfone padrão conectado.",
+                ),
+            };
         };
         let current = match self.ctl.muted(&id) {
             Ok(muted) => muted,
@@ -793,10 +809,15 @@ impl Engine {
 
     /// Saída padrão conectada, do último sincronismo. Não toca no sistema.
     pub fn default_render(&self) -> Option<DeviceId> {
+        self.default_device(Flow::Render)
+    }
+
+    /// Dispositivo padrão conectado de um sentido, do último sincronismo.
+    fn default_device(&self, flow: Flow) -> Option<DeviceId> {
         self.lock()
             .devices
             .iter()
-            .find(|d| d.flow == Flow::Render && d.is_default && d.connected)
+            .find(|d| d.flow == flow && d.is_default && d.connected)
             .map(|d| d.id.clone())
     }
 
@@ -2277,6 +2298,59 @@ mod tests {
             ]
         );
         assert_eq!(world.notes(), before + 2);
+    }
+
+    #[test]
+    fn mic_mute_toggles_the_default_microphone_and_not_the_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        world.source.set_devices(vec![
+            Device {
+                is_default: true,
+                ..device("fone", Flow::Render, true, "Fone")
+            },
+            Device {
+                is_default: true,
+                ..device("mic", Flow::Capture, true, "Microfone")
+            },
+        ]);
+        engine.refresh();
+
+        let ligado = engine.execute(Action::ToggleMicMute);
+        assert!(ligado.ok && ligado.changed, "{ligado:?}");
+        assert_eq!(ligado.resolved.as_deref(), Some("mic"));
+        // Só o microfone foi tocado: a saída continua como estava.
+        assert_eq!(
+            world.ctl.calls(),
+            vec![CtlCall::SetMuted("mic".to_string(), true)]
+        );
+
+        let definido = engine.execute(Action::SetMicMute { muted: true });
+        assert!(definido.ok);
+        assert!(!definido.changed, "já estava mudo: nada muda");
+    }
+
+    #[test]
+    fn mic_mute_without_default_microphone_fails_with_no_input_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = World::new();
+        let engine = world.engine_at(dir.path());
+        // Há saída padrão, mas nenhum microfone é o padrão.
+        world.source.set_devices(vec![
+            Device {
+                is_default: true,
+                ..device("fone", Flow::Render, true, "Fone")
+            },
+            device("mic", Flow::Capture, true, "Microfone"),
+        ]);
+        engine.refresh();
+
+        let result = engine.execute(Action::ToggleMicMute);
+
+        assert!(!result.ok && !result.changed);
+        assert_eq!(result.error_code, Some(ErrorCode::NoInputDevice));
+        assert!(world.ctl.calls().is_empty());
     }
 
     #[test]

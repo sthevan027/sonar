@@ -55,6 +55,20 @@ export const ACTION_CHOICES: ActionChoice[] = [
     brass: true,
   },
   {
+    kind: "toggle_mic_mute",
+    label: "Alternar o mudo do microfone padrão",
+    hint: "",
+    icon: "mic",
+    brass: false,
+  },
+  {
+    kind: "set_mic_mute",
+    label: "Silenciar / Ativar o microfone padrão",
+    hint: "mudo",
+    icon: "mic",
+    brass: false,
+  },
+  {
     kind: "toggle_output_mute",
     label: "Alternar o mudo da saída padrão",
     hint: "",
@@ -129,6 +143,10 @@ export function actionOfKind(kind: ActionKind): Action {
       return { type: "activate_profile", profile_id: "" };
     case "cycle_profile":
       return { type: "cycle_profile", direction: "next" };
+    case "toggle_mic_mute":
+      return { type: "toggle_mic_mute" };
+    case "set_mic_mute":
+      return { type: "set_mic_mute", muted: true };
     case "toggle_output_mute":
       return { type: "toggle_output_mute" };
     case "set_output_mute":
@@ -159,7 +177,11 @@ export function withDirection(action: Action, direction: Direction): Action {
 }
 
 export function withMuted(action: Action, muted: boolean): Action {
-  if (action.type === "set_output_mute" || action.type === "set_app_mute") {
+  if (
+    action.type === "set_output_mute" ||
+    action.type === "set_mic_mute" ||
+    action.type === "set_app_mute"
+  ) {
     return { ...action, muted };
   }
   return action;
@@ -201,6 +223,7 @@ export function hasParameters(kind: ActionKind): boolean {
     kind === "activate_profile" ||
     kind === "cycle_profile" ||
     kind === "set_output_mute" ||
+    kind === "set_mic_mute" ||
     kind === "step_output_volume" ||
     kind === "set_output_volume" ||
     kind === "set_app_mute" ||
@@ -228,6 +251,9 @@ export function bindingTitle(action: Action, ctx: LabelContext): string {
   switch (action.type) {
     case "toggle_panel":
       return "Atalho global";
+    case "toggle_mic_mute":
+    case "set_mic_mute":
+      return "Mudo do microfone padrão";
     case "toggle_output_mute":
     case "set_output_mute":
       return "Mudo da saída padrão";
@@ -255,8 +281,10 @@ export function bindingDetail(action: Action, ctx: LabelContext): string {
   switch (action.type) {
     case "toggle_panel":
       return "Abre o painel na hora";
+    case "toggle_mic_mute":
     case "toggle_output_mute":
       return "Alternar o mudo";
+    case "set_mic_mute":
     case "set_output_mute":
       return action.muted ? "Silenciar" : "Ativar o som";
     case "step_output_volume":

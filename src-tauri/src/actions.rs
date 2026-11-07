@@ -29,6 +29,10 @@ pub enum Action {
     SetOutputMute { muted: bool },
     /// Inverte o mudo da saída padrão.
     ToggleOutputMute,
+    /// Liga ou desliga o mudo do microfone padrão.
+    SetMicMute { muted: bool },
+    /// Inverte o mudo do microfone padrão.
+    ToggleMicMute,
     /// Soma `delta` ao volume da saída padrão (de 0.0 a 1.0, o resultado é limitado).
     StepOutputVolume { delta: f32 },
     /// Define o volume da saída padrão (de 0.0 a 1.0).
@@ -48,6 +52,7 @@ pub enum ErrorCode {
     ProfileNotFound,
     NoProfiles,
     NoOutputDevice,
+    NoInputDevice,
     NotEnoughOutputs,
     DeviceGone,
     Unsupported,
@@ -150,6 +155,8 @@ impl ActionExecutor for Engine {
             Action::ActivateProfile { profile_id } => self.act_activate_profile(&profile_id),
             Action::SetOutputMute { muted } => self.act_output_mute(MuteMode::Set(muted)),
             Action::ToggleOutputMute => self.act_output_mute(MuteMode::Toggle),
+            Action::SetMicMute { muted } => self.act_mic_mute(MuteMode::Set(muted)),
+            Action::ToggleMicMute => self.act_mic_mute(MuteMode::Toggle),
             Action::StepOutputVolume { delta } => self.act_output_volume(VolumeMode::Step(delta)),
             Action::SetOutputVolume { value } => self.act_output_volume(VolumeMode::Set(value)),
             Action::SetAppMute { exe, muted } => self.act_app_mute(&exe, muted),
@@ -186,6 +193,14 @@ mod tests {
                 Action::CycleProfile {
                     direction: Direction::Next,
                 },
+            ),
+            (
+                r#"{"type":"toggle_mic_mute"}"#,
+                Action::ToggleMicMute,
+            ),
+            (
+                r#"{"type":"set_mic_mute","muted":false}"#,
+                Action::SetMicMute { muted: false },
             ),
             (
                 r#"{"type":"set_output_mute","muted":true}"#,
