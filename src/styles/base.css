@@ -45,7 +45,8 @@ button:focus-visible {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 18px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  /* Sem sombra: ela era cortada nas bordas da janela transparente e aparecia como uma
+     camada escura retangular atrás do painel. */
   padding: 18px;
   display: flex;
   flex-direction: column;
