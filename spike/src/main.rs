@@ -42,8 +42,8 @@ fn windows_build() -> u32 {
 unsafe fn policy() -> Result<Policy> {
     let class = HSTRING::from("Windows.Media.Internal.AudioPolicyConfig");
     let build = windows_build();
-    // EarTrumpet: build >= 21390 usa a variante 21H2 (19 metodos antes), senao Downlevel (17).
-    let (iid, fillers, name) = if build >= 21390 { (IID_21H2, 19usize, "21H2") } else { (IID_DOWNLEVEL, 17usize, "Downlevel") };
+    // EarTrumpet: build >= 21390 usa a variante 21H2 (19 metodos antes), senao Downlevel (19).
+    let (iid, fillers, name) = if build >= 21390 { (IID_21H2, 19usize, "21H2") } else { (IID_DOWNLEVEL, 19usize, "Downlevel") };
     let mut p: *mut c_void = std::ptr::null_mut();
     let f: IInspectable = RoGetActivationFactory(&class)?;
     f.query(&iid, &mut p).ok()?;

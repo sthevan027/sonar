@@ -50,7 +50,7 @@ O controle de som do Windows 10/11 exige muitos cliques e não permite deixar, d
 
 ## 4. Fatos técnicos verificados (spike, Windows 11 build 26300)
 
-- Roteamento por app: `RoGetActivationFactory("Windows.Media.Internal.AudioPolicyConfig")` com o IID da variante "21H2" (`ab3d4648-e242-459f-b02f-541c70306324`); métodos `SetPersistedDefaultAudioEndpoint`, `GetPersistedDefaultAudioEndpoint`, `ClearAllPersistedApplicationDefaultEndpoints` (vtable: 6 slots de IUnknown+IInspectable, 19 slots reservados, depois os três). Variante Downlevel (`2a59116d-6c4f-45e0-a74f-707e3fef9258`, 17 slots reservados) para builds < 21390 (limiar do EarTrumpet).
+- Roteamento por app: `RoGetActivationFactory("Windows.Media.Internal.AudioPolicyConfig")` com o IID da variante "21H2" (`ab3d4648-e242-459f-b02f-541c70306324`); métodos `SetPersistedDefaultAudioEndpoint`, `GetPersistedDefaultAudioEndpoint`, `ClearAllPersistedApplicationDefaultEndpoints` (vtable: 6 slots de IUnknown+IInspectable, 19 slots reservados, depois os três). Variante Downlevel (`2a59116d-6c4f-45e0-a74f-707e3fef9258`, 19 slots reservados) para builds < 21390 (limiar do EarTrumpet).
 - ID de dispositivo enviado ao Windows: `\\?\SWD#MMDEVAPI#{endpoint-id}#{e6327cad-dcec-4949-ae8a-991e976a79d2}` (saída) ou `...#{2eef81be-33fa-4800-9670-1cd474972c3f}` (entrada). **Duas barras iniciais**; com uma só o Windows devolve `E_INVALIDARG` sem pista.
 - Os dois papéis (`eMultimedia`=1 e `eConsole`=0) são gravados a cada rota; passar HSTRING vazio limpa a rota (volta ao padrão).
 - Escrita de **entrada** aceita (`eCapture`), verificada no Discord.
@@ -61,7 +61,7 @@ O controle de som do Windows 10/11 exige muitos cliques e não permite deixar, d
 - O Chrome usa um processo de áudio separado: o PID da sessão é o certo?
 - Trocar entre **dois microfones reais** (só há um ativo no PC de casa).
 - Comportamento do Windows quando o dispositivo roteado some.
-- Windows 10 (variante Downlevel) e builds entre 19041 e 21389.
+- Windows 10 e builds abaixo de 21390: roteamento por app desativado (variante Downlevel não validada).
 
 ## 5. Arquitetura
 

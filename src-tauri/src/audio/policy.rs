@@ -25,10 +25,9 @@ const MMDEVAPI_PREFIX: &str = r"\\?\SWD#MMDEVAPI#";
 const RENDER_SUFFIX: &str = "#{e6327cad-dcec-4949-ae8a-991e976a79d2}";
 const CAPTURE_SUFFIX: &str = "#{2eef81be-33fa-4800-9670-1cd474972c3f}";
 
-/// Primeira build com a interface `AudioPolicyConfig` da variante Win11 (21H2).
+/// Primeira build com a interface `AudioPolicyConfig` da variante Win11 (IID rotulado "21H2"
+/// no spike; o rótulo não é a versão do Windows: o 21H2 do Win10 é a build 19044 e o do Win11 é 22000).
 const WIN11_MIN_BUILD: u32 = 21390;
-/// Primeira build do Windows 10 com a API de roteamento (abaixo disso, sem suporte).
-const DOWNLEVEL_MIN_BUILD: u32 = 19041;
 
 /// IIDs da interface `AudioPolicyConfig` por variante (valores do spike).
 #[cfg(windows)]
@@ -39,6 +38,8 @@ const IID_DOWNLEVEL: GUID = GUID::from_u128(0x2a59116d_6c4f_45e0_a74f_707e3fef92
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
     Win11,
+    // Não é construída fora dos testes enquanto `variant_for_build` a mantém desligada.
+    #[allow(dead_code)]
     Downlevel,
 }
 
@@ -62,22 +63,18 @@ pub fn parse_policy_string(s: &str) -> Option<DeviceId> {
     (!id.is_empty()).then(|| DeviceId(id.to_string()))
 }
 
-/// `None` abaixo da build 19041, onde a API de roteamento não existe.
+/// `None` abaixo de `WIN11_MIN_BUILD`. A variante Downlevel (Win10) fica desligada de propósito:
+/// ela não foi validada num Windows 10 real (ver docs/VERIFICACAO.md), e chamar a vtable errada
+/// derruba o app. Sem variante, o roteamento vira `Unsupported` e o latch de `Engine` o desliga.
 pub fn variant_for_build(build: u32) -> Option<Variant> {
-    if build >= WIN11_MIN_BUILD {
-        Some(Variant::Win11)
-    } else if build >= DOWNLEVEL_MIN_BUILD {
-        Some(Variant::Downlevel)
-    } else {
-        None
-    }
+    (build >= WIN11_MIN_BUILD).then_some(Variant::Win11)
 }
 
 /// Métodos "reservados" na vtable antes de `Set`, depois dos 6 de IUnknown+IInspectable.
 pub fn reserved_slots(v: Variant) -> usize {
     match v {
         Variant::Win11 => 19,
-        Variant::Downlevel => 17,
+        Variant::Downlevel => 19,
     }
 }
 
@@ -208,7 +205,7 @@ impl WindowsRouteBackend {
             .build
             .ok_or_else(|| AudioError::Unsupported("não foi possível ler a build do Windows".into()))?;
         variant_for_build(build)
-            .ok_or_else(|| AudioError::Unsupported(format!("build {build} abaixo de 19041")))
+            .ok_or_else(|| AudioError::Unsupported(format!("build {build} abaixo de {WIN11_MIN_BUILD}")))
     }
 
     /// Grava o mesmo valor nos dois papéis: eMultimedia (1) e eConsole (0).
@@ -306,16 +303,18 @@ mod tests {
 
     #[test]
     fn variant_for_build_boundaries() {
-        assert_eq!(variant_for_build(21389), Some(Variant::Downlevel));
+        // Downlevel desligada: abaixo de 21390 não há variante, nem no Win10 (19041+).
+        assert_eq!(variant_for_build(21389), None);
+        assert_eq!(variant_for_build(19041), None);
+        assert_eq!(variant_for_build(19040), None);
         assert_eq!(variant_for_build(21390), Some(Variant::Win11));
         assert_eq!(variant_for_build(26300), Some(Variant::Win11));
-        assert_eq!(variant_for_build(19040), None);
     }
 
     #[test]
     fn reserved_slots_per_variant() {
         assert_eq!(reserved_slots(Variant::Win11), 19);
-        assert_eq!(reserved_slots(Variant::Downlevel), 17);
+        assert_eq!(reserved_slots(Variant::Downlevel), 19);
     }
 
     /// Manual: só roda com `cargo test -- --ignored`, com `SONAR_TEST_PID` (processo com áudio,

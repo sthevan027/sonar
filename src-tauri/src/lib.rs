@@ -43,6 +43,7 @@ const MIC_IDLE: Duration = Duration::from_millis(250);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_crash_log();
     tauri::Builder::default()
         // Precisa ser o primeiro plugin: uma segunda execução só mostra o painel da primeira.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -111,9 +112,7 @@ pub fn run() {
 /// Cria o `Engine` com as implementações do Windows e liga as fontes de atualização.
 /// Todas as threads são destacadas: não seguram o processo depois que o app fecha.
 fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let project = ProjectDirs::from("com", "sthevandev", "sonar")
-        .map(|dirs| dirs.data_dir().to_path_buf());
-    let data_dir = resolve_data_dir(project, std::env::temp_dir().join("sonar"));
+    let data_dir = app_data_dir();
     // Sem pasta, o app segue: a gravação falha e aparece em `save_error`.
     if let Err(err) = std::fs::create_dir_all(&data_dir) {
         eprintln!("sonar: não foi possível criar {}: {err}", data_dir.display());
@@ -231,14 +230,59 @@ fn start_engine(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-/// Pasta de dados: a do sistema quando existe, senão a de reserva.
+/// Pasta de dados do app: a do sistema quando existe, senão a de reserva.
+fn app_data_dir() -> PathBuf {
+    let project = ProjectDirs::from("com", "sthevandev", "sonar")
+        .map(|dirs| dirs.data_dir().to_path_buf());
+    resolve_data_dir(project, std::env::temp_dir().join("sonar"))
+}
+
 fn resolve_data_dir(project: Option<PathBuf>, fallback: PathBuf) -> PathBuf {
     project.unwrap_or(fallback)
 }
 
+/// Hook de pânico que grava a mensagem, a localização e o backtrace em `sonar-crash.log`
+/// na pasta de dados, e depois chama o hook anterior (o padrão imprime no stderr).
+fn install_crash_log() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Falha de escrita é ignorada: o hook não pode causar outro pânico.
+        let _ = write_crash_log(info);
+        previous(info);
+    }));
+}
+
+fn write_crash_log(info: &std::panic::PanicHookInfo<'_>) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let dir = app_data_dir();
+    std::fs::create_dir_all(&dir)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("sonar-crash.log"))?;
+
+    let payload = info
+        .payload()
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| info.payload().downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "(sem mensagem)".into());
+    let location = info
+        .location()
+        .map_or_else(|| "(sem localização)".into(), |loc| loc.to_string());
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let backtrace = std::backtrace::Backtrace::force_capture();
+    // Uma única escrita por pânico, para pânicos simultâneos não intercalarem linhas.
+    let entry = format!("[{secs}] pânico em {location}: {payload}\n{backtrace}\n\n");
+    file.write_all(entry.as_bytes())
+}
+
 /// Roda `f` segurando pânico: loga e devolve `false` se ele ocorreu, para a thread
-/// seguir no laço. Em build de release `panic = "abort"` (Cargo.toml) não há o que
-/// segurar; o guarda só vale em depuração e nos testes.
+/// seguir no laço. Vale em release também: `panic = "unwind"` (Cargo.toml) mantém o
+/// desenrolar do pânico, que é o que o `catch_unwind` precisa.
 fn guarded(label: &str, f: impl FnOnce()) -> bool {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(()) => true,

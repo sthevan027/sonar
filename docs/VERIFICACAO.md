@@ -66,9 +66,10 @@ pelo menos um app com som (Spotify, navegador ou similar) e um fone ou caixa de 
 
 ## Windows 10
 
-- [ ] **Windows 10 (não testado).** No Windows 10 o roteamento usa a variante "Downlevel" da
-  interface de política de áudio (escolha feita por `variant_for_build`), sem teste real. Se houver uma máquina Windows 10, repita os
-  itens de roteamento acima e registre o resultado aqui. Sem máquina, a v1 não é garantida no
+- [ ] **Windows 10 (não testado).** No Windows 10 o roteamento por app está desativado de
+  propósito: `variant_for_build` devolve `None` abaixo da build 21390, porque a variante "Downlevel" da
+  interface de política de áudio nunca foi exercitada num Windows 10 real. Se houver uma máquina Windows 10, valide a
+  variante Downlevel (19 slots reservados, IID `2a59116d-...`), religue-a em `variant_for_build` e registre o resultado aqui. Sem máquina, a v1 não é garantida no
   Windows 10.
 
 ## Após a verificação

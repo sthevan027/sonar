@@ -48,7 +48,7 @@ Legenda de marcação: **[código]** = verificado no repo (`arquivo:linha`); **[
 
 Pontos de atenção:
 
-- O roteamento depende de **IIDs e índices de vtable** fixos por variante de build (`policy.rs:35-37`, `77-82`, `92-96`). `variant_for_build` cobre Win11 a partir de 21390 e Downlevel a partir de 19041 (`policy.rs:28-31`, `66-74`). Isso é frágil por natureza: quebra silenciosa ou falha em builds novas. O próprio `DECISOES.md:44-47` reconhece que a interface foi "declarada na mão". [código]
+- O roteamento depende de **IIDs e índices de vtable** fixos por variante de build (`policy.rs:35-37`, `77-82`, `92-96`). `variant_for_build` cobre só Win11 a partir de 21390; abaixo disso devolve `None` e o roteamento por app fica desativado, porque a variante Downlevel não foi validada em Win10 real (`policy.rs`). Isso é frágil por natureza: quebra silenciosa ou falha em builds novas. O próprio `DECISOES.md:44-47` reconhece que a interface foi "declarada na mão". [código]
 - O único teste de roteamento real é `#[ignore]` e exige variáveis de ambiente e um app tocando áudio (`policy.rs:325-327`). Persistência da rota (sobreviver a reinício) está em aberto. [código, DECISOES.md:52]
 
 ### 2.3 Estado, regras e perfis
@@ -91,7 +91,7 @@ Pontos de atenção:
 - **L4. Não há mudo de app por exe.** Só por pid (`engine.rs:322`). [código]
 - **L5. Atalhos: um único binding**, sem lista, sem detecção de conflito além do erro de registro, e sem migração pensada para múltiplos bindings. [código]
 - **L6. Equalizador: zero código.** Não há tipo de filtro, modelo de banda, persistência de EQ, nem ponto de inserção no áudio. Também não há processamento de sinal (`grep` por `equaliz|APO|effect|biquad` só encontra textos de documentação). [código]
-- **L7. Win10:** o `DOWNLEVEL_MIN_BUILD` (19041, `policy.rs:31`) é o limiar do roteamento. A doc da Microsoft para `AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS` diz Windows 10 build 20348 como mínimo [doc]. Se process loopback for usado algum dia, Win10 fica de fora ou precisa de caminho próprio. **PENDENTE.**
+- **L7. Win10:** o limiar do roteamento por app é `WIN11_MIN_BUILD` (21390, `policy.rs`); abaixo dele o roteamento fica desativado. A doc da Microsoft para `AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS` diz Windows 10 build 20348 como mínimo [doc]. Se process loopback for usado algum dia, Win10 fica de fora ou precisa de caminho próprio. **PENDENTE.**
 - **L8. Pontos bons para reaproveitar:** `EndpointControl` e `RouteBackend` são traits com fakes em teste (`engine.rs:606-...`); o motor é testável sem áudio real. [código]
 
 ---
