@@ -66,11 +66,16 @@ pelo menos um app com som (Spotify, navegador ou similar) e um fone ou caixa de 
 
 ## Windows 10
 
-- [ ] **Windows 10 (não testado).** No Windows 10 o roteamento por app está desativado de
-  propósito: `variant_for_build` devolve `None` abaixo da build 21390, porque a variante "Downlevel" da
-  interface de política de áudio nunca foi exercitada num Windows 10 real. Se houver uma máquina Windows 10, valide a
-  variante Downlevel (19 slots reservados, IID `2a59116d-...`), religue-a em `variant_for_build` e registre o resultado aqui. Sem máquina, a v1 não é garantida no
-  Windows 10.
+- [x] **App roda no Windows 10 (23/11/2026, build 19045).** Build novo (`tauri build`, instalador
+  NSIS) instalado por cima da versão de 07/11. Abre, fica estável (sem eventos de erro no Windows
+  nem `sonar-crash.log`), a instância única mostra o painel e o painel foi conferido à mão.
+  A versão anterior caía com `0xc0000005` em `combase.dll`: o `sonar.exe` instalado era de 07/11,
+  anterior à correção de 22/11 (commit `54f984e`), que usava a variante Downlevel com 17 slots.
+- [ ] **Roteamento por app no Windows 10 (desativado de propósito).** `variant_for_build` devolve
+  `None` abaixo da build 21390, porque a variante "Downlevel" da interface de política de áudio nunca
+  foi exercitada num Windows 10 real. Para ligar: valide a variante Downlevel (19 slots reservados,
+  IID `2a59116d-...`) nesta máquina, religue-a em `variant_for_build` e registre o resultado aqui.
+  Enquanto isso, volume e mudo funcionam e o roteamento aparece como não suportado.
 
 ## Após a verificação
 

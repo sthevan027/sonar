@@ -53,7 +53,7 @@ O Sthevan quer controlar também a **entrada**: quais programas usam qual microf
 - Comportamento exato quando o dispositivo some (um relato diz que o app fica mudo até trocar a saída; o Sthevan quer cair no padrão).
 - Posicionar o popup perto do ícone da bandeja (o Focus Brew não faz isso).
 - Nome do produto. Licença / código aberto ou fechado.
-- Windows 10: testar a variante Downlevel.
+- Windows 10: o app já roda (23/11/2026), com o roteamento por app desativado. Falta validar a variante Downlevel para religá-lo.
 
 ## Próximos passos sugeridos
 
